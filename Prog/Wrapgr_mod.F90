@@ -96,10 +96,10 @@ Contains
     Use mpi
 #endif
     Implicit none
-    Integer :: n, nf, dmax
-#ifdef MPI
-    Integer :: k, irank_l, ierr
+    Integer :: n, nf, dmax, k
     Character (Len=16) :: source
+#ifdef MPI
+    Integer :: irank_l, ierr
 #endif
     ! Widest wrap support in the model. Op%N, not Op%N_non_zero: the conjugation
     ! the panels have to follow touches all N rows.
@@ -114,17 +114,17 @@ Contains
     source = 'off'
     call MPI_Comm_rank(Group_Comm, irank_l, ierr)
     if (irank_l == 0) then
-       k      = delay_depth(Ndim)
+       k      = delay_resolve(Ndim)
        source = delay_source
     endif
     call MPI_Bcast(k,      1,  MPI_INTEGER,   0, Group_Comm, ierr)
     call MPI_Bcast(source, 16, MPI_CHARACTER, 0, Group_Comm, ierr)
-    call delay_set_depth(k, source)
+#else
+    k      = delay_resolve(Ndim)
+    source = delay_source
 #endif
-    call delay_alloc(Ndim, N_FL, dmax)
-    ! delay_alloc has already resolved the depth, so this call is the cached
-    ! value -- it does not re-run the probe.
-    call Control_set_delay_depth(delay_depth(Ndim), delay_source)
+    call delay_alloc(Ndim, N_FL, dmax, k)
+    call Control_set_delay_depth(k, source)
   end Subroutine Wrapgr_delay_alloc
 
   Subroutine Wrapgr_delay_dealloc

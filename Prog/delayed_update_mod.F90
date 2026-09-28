@@ -78,7 +78,7 @@
 !> flushed G.
 !>
 !> By default delayed updates are off. The environment variable ALF_DELAY_K set
-!> to the appropriate value enables it; see delay_depth for more details.
+!> to the appropriate value enables it; see delay_resolve for more details.
 !-------------------------------------------------------------------------------
 
 module delayed_update_mod
@@ -90,7 +90,7 @@ module delayed_update_mod
    implicit none
 
    private
-   public :: delay_alloc, delay_dealloc, delay_depth, delay_set_depth
+   public :: delay_alloc, delay_dealloc, delay_resolve
    public :: delay_assert_inactive, delay_open, delay_close
    public :: delay_block, delay_row, delay_col, delay_append, delay_flush
    public :: delay_wrap, delay_pending, delay_log
@@ -109,24 +109,16 @@ module delayed_update_mod
    ! Record if a factored region is open
    logical, public, protected, save :: delay_active = .false.
 
-   ! Parsed once from ALF_DELAY_K: 0 disables the delay and a positive value
-   ! fixes the depth outright, so the named requests take the negatives.
+   ! ALF_DELAY_K as parsed by delay_resolve, kept for delay_log: 0 disables the
+   ! delay and a positive value fixes the depth, so named requests are negative.
    integer, private, parameter :: K_AUTO    = -1 ! "auto": measure the depth
    integer, private, parameter :: K_FORMULA = -2 ! "formula": k ~ sqrt(2*Ndim)
-   integer, private, parameter :: K_UNREAD  = -3 ! the variable is not yet read
-   integer, private, save      :: k_request = K_UNREAD
+   integer, private, save      :: k_request = 0
 
    ! Constants on the depth "auto" may resolve to: a ceiling and floor on the
    ! possible delay depths we can set.
    integer, private, parameter :: K_FLOOR   = 8
    integer, private, parameter :: K_CEILING = 256
-
-   ! The resolved "auto" depth, cached.
-   integer, private, save :: k_resolved = 0
-
-   ! Set when the caller has imposed a depth through delay_set_depth, which
-   ! then stands in for whatever ALF_DELAY_K would have resolved to here.
-   logical, private, save :: depth_imposed = .false.
 
    ! How the depth in force was arrived at, for the info file: off, fixed,
    ! probe or formula. Protected rather than behind an accessor, since
@@ -183,36 +175,36 @@ contains
 
 !-------------------------------------------------------------------------------
 !> @brief
-!> Set the delay depth for this run; 0 when the delayed update is disabled.
+!> Resolve the delay depth for this run; 0 when the delayed update is disabled.
 !>
 !> @details
-!> ALF_DELAY_K, is read once and cached:
+!> Reads ALF_DELAY_K:
 !>
-!>    - Unset or "0" disables delayed updates
-!>    - A positive integer sets the depth with no further adjustments
-!>    - "auto" estimates an optimal delay depth: delay_probe times the two
-!>      k-dependent costs at the model's Ndim and takes the argmin,
-!>      falling back to delay_formula's closed form when the measurement fails
-!>     to converge. Once resolved the delay depth is to k_resolved.
+!>    - unset, "0", negative or unreadable: delay off
+!>    - a positive integer: used verbatim, not clamped
+!>    - "formula": delay_formula, k ~ sqrt(2*Ndim)
+!>    - "auto": delay_probe times the flush and panel costs at this Ndim and
+!>      takes the largest k within PROBE_MARGIN of the cheapest, falling back
+!>      to delay_formula if the measurement is impossible or inconclusive
 !>
-!> It should be noted that depths chosen by measurement will vary between runs
-!> of one chain; this is acceptable since up to numerical Metropolis "near-ties"
-!> auxiliary field configurations should remain equivalent nevertheless across
-!> different k.
+!> "formula" and "auto" are clamped to [K_FLOOR, K_CEILING] and never above
+!> Ndim. Also sets delay_source and what delay_log reports.
 !>
-!> The clamp [8, 256] bounds what "auto" and "formula" may return. Its purpose
-!> is to keep the resolved depth inside the range the delayed path has been
-!> exercised over, rather than to express an optimum: below the floor the flush
-!> is too frequent to amortise, and above the ceiling the panel reconstructions
-!> dominate. A depth given explicitly as an integer is used verbatim and is not
-!> clamped.
+!> Call once and pass the result to delay_alloc: "auto" is a timing, so a
+!> second call may answer differently. Under MPI only one rank should call it
+!> and broadcast the result, as Wrapgr_delay_alloc does: delay_probe holds an
+!> Ndim**2 scratch, and ranks probing at once would contend for the very memory
+!> system they are measuring.
 !>
-!> Delay depth is deliberately not configured as a simulation parameter in order
-!> avoid add spurious additional information at the data analysis stage, since
-!> when we use the auto delay depth selection k will vary run-to-run.
+!> A measured depth may differ between runs of one chain. This is harmless:
+!> different k give the same chain up to rounding, which can only flip
+!> Metropolis decisions that are near-ties.
+!>
+!> The depth is deliberately not a simulation parameter, so that a
+!> run-to-run choice does not show up as a difference between runs' parameters.
 !-------------------------------------------------------------------------------
 
-   integer function delay_depth(Ndim)
+   integer function delay_resolve(Ndim)
 
       implicit none
 
@@ -222,79 +214,43 @@ contains
       integer :: length, status    ! from get_environment_variable
       integer :: value             ! the depth, where the request was a number
 
-      ! A depth imposed from outside stands: under MPI one rank resolves and
-      ! hands the answer to the others, which must not re-read or re-measure.
-      if (depth_imposed) then
-         delay_depth = k_resolved
-         return
-      endif
+      k_request      = 0
+      k_request_text = '<unset>'
+      delay_source   = 'off'
 
-      if (k_request == K_UNREAD) then
-         k_request = 0
-         call get_environment_variable("ALF_DELAY_K", text, length, status)
-         if (status == 0 .and. length > 0) then
-            word           = trim(adjustl(text(1:length)))
-            k_request_text = word
-            select case (word)
-             case ('auto', 'AUTO')
-               k_request = K_AUTO
-             case ('formula', 'FORMULA')
-               k_request = K_FORMULA
-             case default
-               read (word, *, iostat=status) value
-               if (status == 0 .and. value >= 0) then
-                  k_request = value
-               else
-                  ! When unreadable turn delays off, but say so.
-                  k_request_text = trim(word)//' (unreadable)'
-               endif
-            end select
-         endif
+      call get_environment_variable("ALF_DELAY_K", text, length, status)
+      if (status == 0 .and. length > 0) then
+         word           = trim(adjustl(text(1:length)))
+         k_request_text = word
+         select case (word)
+          case ('auto', 'AUTO')
+            k_request = K_AUTO
+          case ('formula', 'FORMULA')
+            k_request = K_FORMULA
+          case default
+            read (word, *, iostat=status) value
+            if (status == 0 .and. value >= 0) then
+               k_request = value
+            else
+               ! When unreadable turn delays off, but say so.
+               k_request_text = trim(word)//' (unreadable)'
+            endif
+         end select
       endif
 
       select case (k_request)
        case (K_FORMULA)
-         if (k_resolved == 0) then
-            k_resolved   = delay_formula(Ndim)
-            delay_source = 'formula'
-         endif
-         delay_depth = k_resolved
+         delay_resolve = delay_formula(Ndim)
+         delay_source  = 'formula'
        case (K_AUTO)
-         ! Resolved once per run, then cached: this is a timing, and a second
-         ! call could answer differently. delay_probe sets delay_source itself,
-         ! since it may have to fall back to the formula.
-         if (k_resolved == 0) k_resolved = delay_probe(Ndim)
-         delay_depth = k_resolved
+         ! delay_probe sets delay_source itself, since it may have to fall back
+         ! to the formula.
+         delay_resolve = delay_probe(Ndim)
        case default
-         delay_depth = k_request
+         delay_resolve = k_request
          if (k_request > 0) delay_source = 'fixed'
       end select
-   end function delay_depth
-
-!-------------------------------------------------------------------------------
-!> @brief
-!> Impose a depth from outside, in place of reading ALF_DELAY_K here.
-!>
-!> @details
-!> "auto" resolves the depth by timing, and under MPI that timing has to be
-!> taken on one rank alone: delay_probe holds an Ndim**2 scratch, so a fully
-!> occupied node would carry one per rank, and ranks measuring at once contend
-!> for the very memory system they are measuring. Wrapgr_delay_alloc therefore
-!> has one rank resolve the depth and broadcasts it. The module itself stays
-!> free of MPI.
-!>
-!> Must be called before delay_alloc. Any later delay_depth returns k verbatim.
-!-------------------------------------------------------------------------------
-
-   subroutine delay_set_depth(k, source)
-      implicit none
-      integer, intent(in) :: k                ! the depth to use, 0 for off
-      character (Len=*), intent(in) :: source ! how it was arrived at, as
-      !                                         delay_source records it
-      depth_imposed = .true.
-      k_resolved    = k
-      delay_source  = source
-   end subroutine delay_set_depth
+   end function delay_resolve
 
 !-------------------------------------------------------------------------------
 !> @brief
@@ -591,6 +547,7 @@ contains
 !> Allocate the panels. No-op when the delay is disabled.
 !>
 !> @param[in] dmax Largest wrap support, maxval(Op_V(:,:)%N).
+!> @param[in] k    The depth, from delay_resolve; 0 or less leaves the delay off.
 !>
 !> @details
 !> The width is kmax + dmax, not kmax: a flip is appended first and the panel
@@ -600,15 +557,15 @@ contains
 !> two differ (N_non_zero <= N) and the conjugation touches all N rows.
 !-------------------------------------------------------------------------------
 
-   subroutine delay_alloc(Ndim, N_FL, dmax)
+   subroutine delay_alloc(Ndim, N_FL, dmax, k)
       implicit none
-      integer, intent(in) :: Ndim, N_FL, dmax
+      integer, intent(in) :: Ndim, N_FL, dmax, k
 
       ! Recorded even when the delay is off; see the note on the GR dummies.
       ndim_s = Ndim
       nfl_s  = N_FL
 
-      kmax = delay_depth(Ndim)
+      kmax = max(k, 0)
       if (kmax <= 0) return
 
       panel_w = kmax + max(dmax, 1)
@@ -624,16 +581,12 @@ contains
       if (allocated(yp)) deallocate (yp)
       if (allocated(ncol)) deallocate (ncol)
       ! Back to the state delay_alloc found, so that a second allocation cannot
-      ! inherit the shape of the first. The parsed ALF_DELAY_K is left cached:
-      ! it describes the request, not the allocation.
-      kmax          = 0
-      panel_w       = 0
-      ndim_s        = 0
-      nfl_s         = 0
-      k_resolved    = 0
-      depth_imposed = .false.
-      delay_source  = 'off'
-      delay_active  = .false.
+      ! inherit the shape of the first.
+      kmax         = 0
+      panel_w      = 0
+      ndim_s       = 0
+      nfl_s        = 0
+      delay_active = .false.
    end subroutine delay_dealloc
 
 !-------------------------------------------------------------------------------
