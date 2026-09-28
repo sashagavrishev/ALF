@@ -266,8 +266,9 @@ contains
          delay_resolve  = Ndim
       endif
 
-      ! Whichever path gave it, a zero depth is off.
-      if (delay_resolve <= 0) delay_source = 'off'
+      ! Whichever path gave it, a zero depth is off -- except when the probe
+      ! chose it, which is kept so that the run record says why.
+      if (delay_resolve <= 0 .and. trim(delay_source) /= 'probe') delay_source = 'off'
 
       ! A named request resolves to zero on a matrix below the floor, or when
       ! the probe found the immediate update faster.
@@ -286,7 +287,9 @@ contains
 !> Log what the delay is set to and the decision pathway.
 !>
 !> @details
-!> Called once at setup, from main under the rank guard.
+!> Called once at setup, from main under the rank guard. Whenever the probe ran
+!> its curve is printed, with the immediate update as k = 0 on the same scale,
+!> including when the immediate update won and the delay is off.
 !-------------------------------------------------------------------------------
 
    subroutine delay_log(unit)
@@ -300,14 +303,18 @@ contains
       write (unit,'(2a)') '   ALF_DELAY_K            : ', trim(k_request_text)
       if (kmax == 0) then
          write (unit,'(a)') '   status                 : off (immediate)'
-         return
+         ! The probe chose the immediate update: show the curve it lost to.
+         if (trim(delay_source) /= 'probe' .or. probe_cost(1) < 0.d0) return
+         write (unit,'(a,i0)') '   Ndim                   : ', ndim_s
+         write (unit,'(2a)')   '   chosen by              : ', trim(delay_source)
+      else
+         write (unit,'(a,i0)') '   Ndim                   : ', ndim_s
+         write (unit,'(a,i0)') '   depth k                : ', kmax
+         write (unit,'(2a)')   '   chosen by              : ', trim(delay_source)
+         write (unit,'(a,i0)') '   panel width (k + dmax) : ', panel_w
+         write (unit,'(a,i0,a,i0,a)') '   validated range        : [', &
+         & K_FLOOR, ', ', K_CEILING, ']'
       endif
-      write (unit,'(a,i0)') '   Ndim                   : ', ndim_s
-      write (unit,'(a,i0)') '   depth k                : ', kmax
-      write (unit,'(2a)')   '   chosen by              : ', trim(delay_source)
-      write (unit,'(a,i0)') '   panel width (k + dmax) : ', panel_w
-      write (unit,'(a,i0,a,i0,a)') '   validated range        : [', &
-      & K_FLOOR, ', ', K_CEILING, ']'
 
       ! Write a note when one had to fall back to the formula on a refused probe
       if (trim(delay_source) == 'formula' .and. k_request == K_AUTO) &
@@ -318,13 +325,24 @@ contains
 
       write (unit,'(a,f6.3,a,f10.3,a)') '   probe cost             : ', &
       & probe_seconds, ' s, scratch ', probe_scratch_mb, ' MB'
-      write (unit,'(a)') '        k   rel. cost   (1.00 = best)'
+      write (unit,'(a)') '        k   rel. cost   (1.00 = best depth)'
 
       lo = minval(probe_cost, mask=(probe_cost > 0.d0))
 
       ! Mark the depth in force; on a fallback it came from the formula.
       mark = '   <- chosen'
       if (trim(delay_source) == 'formula') mark = '   <- formula'
+
+      ! The immediate update, per column like the candidates, as k = 0.
+      tag = ''
+      if (kmax == 0) tag = mark
+      if (probe_imm_cost > 0.d0 .and. probe_imm_cost < huge(1.d0)) then
+         write (unit,'(a,i5,f12.3,2a)') '   ', 0, probe_imm_cost/lo, &
+         & '  (immediate)', trim(tag)
+      else
+         write (unit,'(a,i5,a)') '   ', 0, '       --  (immediate, not timed)'
+      endif
+
       do i = 1, N_CAND
          tag = ''
          if (K_CAND(i) == kmax) tag = mark
