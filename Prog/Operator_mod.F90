@@ -1000,7 +1000,6 @@ Contains
     Complex (Kind=Kind(0.d0)) :: g_loc, phi_loc
     Integer :: I, sp
     Logical :: up
-    Type (Fields) :: nsigma_single
 
     if (ncols <= 0) return
 
@@ -1014,10 +1013,7 @@ Contains
        return
     endif
 
-    Call nsigma_single%make(1,1)
-    nsigma_single%f(1,1) = HS_Field
-    nsigma_single%t(1)   = op%type
-    phi_loc = nsigma_single%phi(1,1)
+    phi_loc = Phi_of_field(HS_Field, op%type)
 
     g_loc = Op%g
     if (op%g_t_alloc) g_loc = Op%g_t(nt)
@@ -1126,8 +1122,6 @@ Contains
           endif
        endif
     endif
-
-    Call nsigma_single%clear()
 
   end Subroutine Op_Wrap_panels
 
