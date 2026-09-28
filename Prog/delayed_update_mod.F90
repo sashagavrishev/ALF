@@ -188,8 +188,8 @@ contains
 !>      takes the largest k within PROBE_MARGIN of the cheapest, falling back
 !>      to delay_formula if the measurement is impossible or inconclusive
 !>
-!> "formula" and "auto" are clamped to [K_FLOOR, K_CEILING] and never above
-!> Ndim. Also sets delay_source and what delay_log reports.
+!> "formula" and "auto" are clamped to [K_FLOOR, K_CEILING], and turn the delay
+!> off when Ndim < K_FLOOR. Also sets delay_source and what delay_log reports.
 !>
 !> Call once and pass the result to delay_alloc: "auto" is a timing, so a
 !> second call may answer differently. Under MPI only one rank should call it
@@ -260,8 +260,16 @@ contains
          delay_resolve = delay_probe(Ndim)
        case default
          delay_resolve = k_request
-         if (k_request > 0) delay_source = 'fixed'
+         delay_source  = 'fixed'
       end select
+      ! Whichever path gave it, a zero depth is off.
+      if (delay_resolve <= 0) delay_source = 'off'
+
+      ! A named request only resolves to zero on a matrix below the floor.
+      if (delay_resolve <= 0 .and. k_request < 0) then
+         write (word, '(i0)') K_FLOOR
+         k_request_text = trim(k_request_text)//' (Ndim < '//trim(word)//')'
+      endif
    end function delay_resolve
 
 !-------------------------------------------------------------------------------
@@ -328,7 +336,7 @@ contains
 
 !-------------------------------------------------------------------------------
 !> @brief
-!> The closed-form depth: nint(sqrt(2*Ndim)), clamped.
+!> The closed-form depth: nint(sqrt(2*Ndim)), clamped; 0 when Ndim < K_FLOOR.
 !>
 !> @details
 !> Minimises the traffic per accepted update, d*Ndim*k for the panel
@@ -341,10 +349,15 @@ contains
    integer function delay_formula(Ndim)
       implicit none
       integer, intent(in) :: Ndim
-      ! Clamped to the range the delayed path has been exercised over, and never
-      ! wider than the actual matrix.
-      delay_formula = min(K_CEILING, max(1, Ndim), &
-      &                   max(K_FLOOR, nint(sqrt(2.d0*real(Ndim, Kind(0.d0))))))
+      ! Below the floor the matrix is too small for the delay to pay. Above it
+      ! the clamp keeps k within the range the delayed path has been exercised
+      ! over, which for Ndim >= K_FLOOR is also never wider than the matrix.
+      if (Ndim < K_FLOOR) then
+         delay_formula = 0
+      else
+         delay_formula = min(K_CEILING, &
+         &               max(K_FLOOR, nint(sqrt(2.d0*real(Ndim, Kind(0.d0))))))
+      endif
    end function delay_formula
 
 !-------------------------------------------------------------------------------
