@@ -90,7 +90,7 @@ module delayed_update_mod
    implicit none
 
    private
-   public :: delay_alloc, delay_dealloc, delay_resolve
+   public :: delay_alloc, delay_dealloc, delay_resolve, delay_probe_pick
    public :: delay_assert_inactive, delay_open, delay_close
    public :: delay_block, delay_row, delay_col, delay_append, delay_flush
    public :: delay_wrap, delay_pending, delay_log
@@ -391,14 +391,13 @@ contains
       complex (Kind=Kind(0.d0)), allocatable :: v(:), w(:)
 
       ! cost(i) is the modelled per-update cost at K_CAND(i), built from the
-      ! flush time tg and the panel time tv of one reading, this. lo and hi
-      ! bound the finished curve.
-      real (Kind=Kind(0.d0)) :: cost(N_CAND), tg, tv, lo, hi, this
+      ! flush time tg and the panel time tv of one reading, this.
+      real (Kind=Kind(0.d0)) :: cost(N_CAND), tg, tv, this
 
       ! k is the candidate depth, c the half occupancy the panel is timed at,
       ! kwide the widest candidate that fits Ndim and so the width allocated,
-      ! best the winner, stat the allocation status.
-      integer :: i, k, c, kwide, stat, sweep, best
+      ! stat the allocation status.
+      integer :: i, k, c, kwide, stat, sweep
 
       ! Wall clock over the whole ladder, which delay_log reports.
       integer (Kind=8) :: wall0, wall1, wall_rate
@@ -455,6 +454,35 @@ contains
 
       deallocate (g, xs, ys, v, w)
 
+      delay_probe = delay_probe_pick(cost, Ndim, delay_source)
+   end function delay_probe
+
+!-------------------------------------------------------------------------------
+!> @brief
+!> Choose the depth from a probed cost curve: the decision half of delay_probe.
+!>
+!> @details
+!> Kept apart from the timing so that it can be tested on made-up curves.
+!> cost(i) is the modelled per-update cost at K_CAND(i), with huge(1.d0) for a
+!> candidate that was not timed.
+!>
+!> Falls back to delay_formula, with source 'formula', when the curve holds no
+!> usable reading or is flat to within PROBE_MARGIN. Otherwise takes the
+!> largest candidate within PROBE_MARGIN of the cheapest, with source 'probe':
+!> overshooting tends to give better performance on average.
+!-------------------------------------------------------------------------------
+
+   integer function delay_probe_pick(cost, Ndim, source)
+      implicit none
+      real (Kind=Kind(0.d0)), intent(in)  :: cost(N_CAND)
+      integer,                intent(in)  :: Ndim
+      character (Len=*),      intent(out) :: source
+      real (Kind=Kind(0.d0)) :: lo, hi   ! bounds of the timed part of the curve
+
+      ! The fallback
+      source           = 'formula'
+      delay_probe_pick = delay_formula(Ndim)
+
       ! Bounds of the curve; untimed candidates sit at "huge".
       lo = minval(cost, mask=(cost < huge(1.d0)))
       hi = maxval(cost, mask=(cost < huge(1.d0)))
@@ -462,13 +490,9 @@ contains
       ! When the curve is flat prefer the formula.
       if (lo <= 0.d0 .or. hi < PROBE_MARGIN*lo) return
 
-      ! Take the largest candidate within PROBE_MARGIN of the best; overshooting
-      ! tends to give better performance on average.
-      best = maxval(K_CAND, mask=(cost <= PROBE_MARGIN*lo))
-
-      delay_probe  = best
-      delay_source = 'probe'
-   end function delay_probe
+      delay_probe_pick = maxval(K_CAND, mask=(cost <= PROBE_MARGIN*lo))
+      source           = 'probe'
+   end function delay_probe_pick
 
 !-------------------------------------------------------------------------------
 !> @brief
