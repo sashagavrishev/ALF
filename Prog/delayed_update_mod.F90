@@ -285,7 +285,7 @@ contains
 
       write (unit,'(a)')  ' Delayed update:'
       write (unit,'(2a)') '   ALF_DELAY_K            : ', trim(k_request_text)
-      if (kmax <= 0) then
+      if (kmax == 0) then
          write (unit,'(a)') '   status                 : off (immediate)'
          return
       endif
@@ -588,7 +588,7 @@ contains
       nfl_s  = N_FL
 
       kmax = max(k, 0)
-      if (kmax <= 0) return
+      if (kmax == 0) return ! No-op when delays are off
 
       panel_w = kmax + dmax
       allocate (xp(Ndim, panel_w, N_FL), yp(Ndim, panel_w, N_FL))
@@ -613,12 +613,12 @@ contains
 
 !-------------------------------------------------------------------------------
 !> @brief
-!> Open a factored region. No-op when the delay is disabled.
+!> Open a factored region.
 !-------------------------------------------------------------------------------
 
    subroutine delay_open()
       implicit none
-      if (kmax <= 0) return
+      if (kmax == 0) return ! No-op when the delay is disabled.
       ncol   = 0
       delay_active = .true.
    end subroutine delay_open
@@ -652,8 +652,8 @@ contains
       implicit none
       integer, intent(in) :: nf
       Complex (Kind=Kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
-      if (kmax <= 0) return
-      if (ncol(nf) <= 0) return
+      if (kmax == 0) return
+      if (ncol(nf) == 0) return
       call ZGEMM('N', 'T', ndim_s, ndim_s, ncol(nf), ZONE, xp(1,1,nf), &
       &          ndim_s, yp(1,1,nf), ndim_s, ZONE, GR(1,1,nf), ndim_s)
       ncol(nf) = 0
@@ -792,7 +792,7 @@ contains
       Complex (Kind=Kind(0.d0)), intent(in) :: HS_Field
       character(len=1), intent(in) :: updo
       if (.not. delay_active) return
-      if (ncol(nf) <= 0) return
+      if (ncol(nf) == 0) return
       call Op_Wrap_panels(xp(1,1,nf), yp(1,1,nf), Op, HS_Field, ndim_s, &
       &                ncol(nf), N_Type, nt, updo)
    end subroutine delay_wrap
