@@ -623,7 +623,7 @@ contains
 
    subroutine delay_close(GR)
       implicit none
-      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
+      complex (kind=kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
       integer :: nf
       if (.not. delay_active) return
       do nf = 1, nfl_s
@@ -640,7 +640,7 @@ contains
    subroutine delay_flush(nf, GR)
       implicit none
       integer, intent(in) :: nf
-      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
+      complex (kind=kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
       if (kmax == 0) return
       if (ncol(nf) == 0) return
       call ZGEMM('N', 'T', ndim_s, ndim_s, ncol(nf), ZONE, xp(1,1,nf), &
@@ -663,8 +663,8 @@ contains
       implicit none
       integer, intent(in) :: nf, d, P(d)
       integer, intent(in) :: ldb ! Leading dimension of blk
-      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
-      Complex (Kind=Kind(0.d0)), intent(out) :: blk(ldb,*)
+      complex (kind=kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
+      complex (kind=kind(0.d0)), intent(out) :: blk(ldb,*)
       integer :: n, m   ! row and column within the support
       integer :: c
       c = ncol(nf)
@@ -690,10 +690,10 @@ contains
    subroutine delay_row(nf, GR, P, d, rows)
       implicit none
       integer, intent(in) :: nf, d, P(d)
-      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
-      Complex (Kind=Kind(0.d0)), intent(out) :: rows(ndim_s, d)
+      complex (kind=kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
+      complex (kind=kind(0.d0)), intent(out) :: rows(ndim_s, d)
       ! One row of X gathered off the panel, the ZGEMV's coefficient vector.
-      Complex (Kind=Kind(0.d0)) :: tmp(max(ncol(nf),1))
+      complex (kind=kind(0.d0)) :: tmp(max(ncol(nf),1))
       integer :: i      ! column of G, i.e. position along the row
       integer :: l, c   ! l indexes the support, as in rows(:,l) = G(P(l),:)
       c = ncol(nf)
@@ -717,10 +717,10 @@ contains
    subroutine delay_col(nf, GR, P, d, cols)
       implicit none
       integer, intent(in) :: nf, d, P(d)
-      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
-      Complex (Kind=Kind(0.d0)), intent(out) :: cols(ndim_s, d)
+      complex (kind=kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
+      complex (kind=kind(0.d0)), intent(out) :: cols(ndim_s, d)
       ! One row of Y gathered off the panel, the ZGEMV's coefficient vector.
-      Complex (Kind=Kind(0.d0)) :: tmp(max(ncol(nf),1))
+      complex (kind=kind(0.d0)) :: tmp(max(ncol(nf),1))
       integer :: l, c   ! l indexes the support, as in cols(:,l) = G(:,P(l))
       c = ncol(nf)
       do l = 1, d
@@ -745,11 +745,11 @@ contains
    subroutine delay_append(nf, alpha, xcols, ycols, d, GR)
       implicit none
       integer, intent(in) :: nf, d
-      Complex (Kind=Kind(0.d0)), intent(in)    :: alpha   ! update coefficient
+      complex (kind=kind(0.d0)), intent(in)    :: alpha   ! update coefficient
       ! The two factors of the caller's rank-d update, one column pair per rank.
-      Complex (Kind=Kind(0.d0)), intent(in)    :: xcols(ndim_s, d)
-      Complex (Kind=Kind(0.d0)), intent(in)    :: ycols(ndim_s, d)
-      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
+      complex (kind=kind(0.d0)), intent(in)    :: xcols(ndim_s, d)
+      complex (kind=kind(0.d0)), intent(in)    :: ycols(ndim_s, d)
+      complex (kind=kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
       integer :: l      ! which of the d column pairs is being appended
       integer :: c      ! columns already live, so c+l is where l lands
       c = ncol(nf)
@@ -778,7 +778,7 @@ contains
       ! picks which of the two this call mirrors.
       integer, intent(in) :: nf, N_Type, nt
       Type (Operator), intent(in) :: Op
-      Complex (Kind=Kind(0.d0)), intent(in) :: HS_Field
+      complex (kind=kind(0.d0)), intent(in) :: HS_Field
       character(len=1), intent(in) :: updo
       if (.not. delay_active) return
       if (ncol(nf) == 0) return
