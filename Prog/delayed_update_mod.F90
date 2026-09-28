@@ -144,11 +144,6 @@ module delayed_update_mod
    ! Complex identity "z-one"
    complex (Kind=Kind(0.d0)), private, parameter :: ZONE = (1.d0, 0.d0)
 
-   ! The multiplier the probe's kernels accumulate with, small so that
-   ! thousands of repeated applications cannot drift the scratch matrices
-   ! towards overflow or into denormals.
-   complex (Kind=Kind(0.d0)), private, parameter :: PROBE_ALPHA = (1.d-8, 0.d0)
-
    ! Kernel selector for the flush / panel
    integer, private, parameter :: PROBE_FLUSH = 1
    integer, private, parameter :: PROBE_PANEL = 2
@@ -512,10 +507,10 @@ contains
          call system_clock(c0)
          do rep = 1, reps
             if (kernel == PROBE_FLUSH) then
-               call ZGEMM('N', 'T', Ndim, Ndim, n, PROBE_ALPHA, xs, Ndim, &
+               call ZGEMM('N', 'T', Ndim, Ndim, n, ZONE, xs, Ndim, &
                &          ys, Ndim, ZONE, g, Ndim)
             else
-               call ZGEMV('N', Ndim, n, PROBE_ALPHA, xs, Ndim, v, 1, &
+               call ZGEMV('N', Ndim, n, ZONE, xs, Ndim, v, 1, &
                &          ZONE, w, 1)
             endif
          enddo
