@@ -41,13 +41,14 @@ add_executable(36-delayed-panels 36-delayed-panels.F90)
 add_executable(37-delayed-wrap 37-delayed-wrap.F90)
 add_executable(38-delayed-update 38-delayed-update.F90)
 add_executable(40-delayed-depth-cap 40-delayed-depth-cap.F90)
+add_executable(41-delayed-alloc-fail 41-delayed-alloc-fail.F90)
 # set(operatorparts 1-copy-sel-rows 2-copy-sel-columns 3-opmult 4-opmultct 5-FillExpOps 6-opexpmult-1 6-opexpmult-2 7-opexpmultct-1 7-opexpmultct-2 9-Op-Phase 10-Op-mmultL 11-Op-mmultR 13-Op-Wrapup 14-Op-Wrapdo 21-Op-make 22-sl-mat-mults)
 set(operatorparts 9-Op-Phase 10-Op-mmultL 11-Op-mmultR 13-Op-Wrapup 14-Op-Wrapdo 21-Op-make 22-sl-mat-mults 26-Test-Polymorphic-Fortran 27-Op-mmultL-m1.F90 28-Op-validate 29-Op-validate-hermitian-fail 30-Op-validate-type-fail 31-Op-validate-projector-fail 32-Op-validate-1x1-fail 33-Op-equal 34-Op-V-symm-pass 35-Op-V-symm-fail 37-delayed-wrap)
 set(cgr2_2tests 16-get-blocks 17-solve-extended-system)
 #set(cgr2_1tests 8-scalematrix-1 8-scalematrix-2)
 set(cgr1tests 15-cgr 20-qdrp 23-cgrp)
 set(udvstatetests 18-ul-update-matrices 19-ur-update-matrices 24-udv 25-assign-UDV-state)
-set(delayedtests 36-delayed-panels 38-delayed-update 40-delayed-depth-cap)
+set(delayedtests 36-delayed-panels 38-delayed-update 40-delayed-depth-cap 41-delayed-alloc-fail)
 set(progtests ${operatorparts} ${delayedtests} ${cgr1tests} ${cgr2_1tests} ${cgr2_2tests} ${udvstatetests})
 
 
@@ -171,3 +172,9 @@ foreach(case "huge;2147483647;16;1" "above;17;16;1" "at;16;16;0" "below;9;9;0")
   add_test(40-delayed-depth-cap-${name} 40-delayed-depth-cap ${expected} ${capped})
   set_tests_properties(40-delayed-depth-cap-${name} PROPERTIES ENVIRONMENT "ALF_DELAY_K=${request}")
 endforeach()
+
+# Passes on the guard's own message, not on the exit status: the runtime's
+# generic abort would also exit non-zero, and must not count as a pass.
+add_test(41-delayed-alloc-fail 41-delayed-alloc-fail)
+set_tests_properties(41-delayed-alloc-fail PROPERTIES
+                     PASS_REGULAR_EXPRESSION "delay_alloc: cannot allocate the panels")

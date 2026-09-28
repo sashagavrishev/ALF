@@ -584,6 +584,8 @@ contains
    subroutine delay_alloc(Ndim, N_FL, dmax, k)
       implicit none
       integer, intent(in) :: Ndim, N_FL, dmax, k
+      integer :: stat              ! from the panel allocate
+      character (Len=256) :: msg   ! the runtime's reason, when it refuses
 
       ! Recorded even when the delay is off; see the note on the GR dummies.
       ndim_s = Ndim
@@ -595,7 +597,22 @@ contains
       if (kmax == 0) return ! No-op when delays are off
 
       panel_w = kmax + dmax
-      allocate (xp(Ndim, panel_w, N_FL), yp(Ndim, panel_w, N_FL))
+      ! The depth was asked for explicitly, so a refusal stops the run rather
+      ! than quietly falling back to the immediate update; it happens at setup,
+      ! before any work is lost.
+      allocate (xp(Ndim, panel_w, N_FL), yp(Ndim, panel_w, N_FL), &
+      &         stat=stat, errmsg=msg)
+      if (stat /= 0) then
+         write(error_unit,'(a,i0,a,i0,a,i0,a,f0.1,a)') &
+         & 'delay_alloc: cannot allocate the panels for depth k = ', kmax, &
+         & ' (Ndim = ', Ndim, ', N_FL = ', N_FL, ', ', &
+         & 32.d0*real(Ndim, Kind(0.d0))*real(panel_w, Kind(0.d0)) &
+         & *real(N_FL, Kind(0.d0))/1048576.d0, ' MB)'
+         write(error_unit,'(2a)') 'delay_alloc: ALF_DELAY_K = ', trim(k_request_text)
+         write(error_unit,'(2a)') 'delay_alloc: ', trim(msg)
+         write(error_unit,'(a)')  'delay_alloc: lower ALF_DELAY_K, or unset it'
+         Call Terminate_on_error(ERROR_GENERIC,__FILE__,__LINE__)
+      endif
       allocate (ncol(N_FL))
       ncol   = 0
       delay_active = .false.
