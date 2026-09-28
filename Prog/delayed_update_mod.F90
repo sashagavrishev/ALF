@@ -152,6 +152,7 @@ module delayed_update_mod
    ! never ran), its own wall clock, and ALF_DELAY_K as it was given.
    real (Kind=Kind(0.d0)), private, save :: probe_cost(N_CAND) = -1.d0
    real (Kind=Kind(0.d0)), private, save :: probe_seconds = 0.d0
+   real (Kind=Kind(0.d0)), private, save :: probe_scratch_mb = 0.d0
    character (Len=32),     private, save :: k_request_text = '<unset>'
 
    ! Every GR dummy below is explicit shape rather than assumed shape. The
@@ -280,7 +281,7 @@ contains
       integer, intent(in) :: unit      ! where to write; main passes 6
       integer :: i
       real (Kind=Kind(0.d0)) :: lo          ! best cost, the curve's normaliser
-      real (Kind=Kind(0.d0)) :: scratch_mb  ! what the probe's g cost to hold
+      character (Len=13) :: mark, tag       ! marker for the depth in force
 
       write (unit,'(a)')  ' Delayed update:'
       write (unit,'(2a)') '   ALF_DELAY_K            : ', trim(k_request_text)
@@ -297,34 +298,30 @@ contains
 
       ! Write a note when one had to fall back to the formula on a refused probe
       if (trim(delay_source) == 'formula' .and. k_request == K_AUTO) &
-      & write (unit,'(a)') '   NB the probe was refused; this is the formula'
+      & write (unit,'(a)') '   WARN: the probe was refused; this is the formula'
 
       ! Still at its -1 default: the probe never ran, so there is no curve.
       if (probe_cost(1) < 0.d0) return
 
-      ! Guard against a clock with no rate: every candidate then times zero,
-      ! and the whole curve below would be meaningless rather than merely flat.
-      if (.not. any(probe_cost > 0.d0)) then
-         write (unit,'(a)') '   (no timings: the clock reported no rate)'
-         return
-      endif
-
-      scratch_mb = real(ndim_s, Kind(0.d0))**2*16.d0/1048576.d0
-      write (unit,'(a,f6.3,a,f8.1,a)') '   probe cost             : ', &
-      & probe_seconds, ' s, scratch ', scratch_mb, ' MB'
+      write (unit,'(a,f6.3,a,f10.3,a)') '   probe cost             : ', &
+      & probe_seconds, ' s, scratch ', probe_scratch_mb, ' MB'
       write (unit,'(a)') '        k   rel. cost   (1.00 = best)'
 
-      ! The whole curve, normalised to its best: an argmin alone cannot be
-      ! judged, a flat curve and a sharp minimum reporting the same number.
       lo = minval(probe_cost, mask=(probe_cost > 0.d0))
+
+      ! Mark the depth in force; on a fallback it came from the formula.
+      mark = '   <- chosen'
+      if (trim(delay_source) == 'formula') mark = '   <- formula'
       do i = 1, N_CAND
+         tag = ''
+         if (K_CAND(i) == kmax) tag = mark
          if (K_CAND(i) > ndim_s) then
             write (unit,'(a,i5,a)') '   ', K_CAND(i), '       --  (above Ndim)'
-         else if (probe_cost(i) <= 0.d0 .or. probe_cost(i) >= huge(1.d0)) then
+         else if (probe_cost(i) <= 0.d0) then
             write (unit,'(a,i5,a)') '   ', K_CAND(i), '       --  (not timed)'
          else
             write (unit,'(a,i5,f12.3,a)') '   ', K_CAND(i), probe_cost(i)/lo, &
-            & trim(merge('   <- chosen', '            ', K_CAND(i) == kmax))
+            & trim(tag)
          endif
       enddo
    end subroutine delay_log
@@ -415,6 +412,11 @@ contains
       allocate (g(Ndim,Ndim), xs(Ndim,kwide), ys(Ndim,kwide), &
       & v(kwide), w(Ndim), stat=stat)
       if (stat /= 0) return
+
+      ! Everything just allocated, at 16 bytes per complex entry.
+      probe_scratch_mb = 16.d0*(real(Ndim, Kind(0.d0))**2 &
+      &                  + 2.d0*real(Ndim*kwide, Kind(0.d0)) &
+      &                  + real(kwide + Ndim, Kind(0.d0)))/1048576.d0
 
       call probe_fill(g,  Ndim*Ndim)
       call probe_fill(xs, Ndim*kwide)
