@@ -90,8 +90,9 @@ more columns they are flushed into
 $G_{\text{stale}}$ with a single \texttt{ZGEMM} (a level-3 operation).
 
 We choose the factorized region to span a single time slice's sequential
-vertex loop. \texttt{Wrapgr\_mod} brackets that loop and nothing else, so the
-region is closed -- and any partial panel flushed -- before the slice is left.
+vertex loop and nothing else: \texttt{Wrapgr\_mod} opens it just before that
+loop and closes it -- flushing any partial panel -- just after, before the
+slice is left.
 The hopping propagators, the stabilization, measurements, global updates
 and any time-displaced calculations are still always handed an ordinary Green's
 function. Between
@@ -131,16 +132,24 @@ The delayed update is selected by the environment variable
   \item unset or \texttt{0} -- disabled (default);
   \item a positive integer -- the depth $k$ is fixed at that value, capped at
     $N_{\mathrm{dim}}$, beyond which the panels outgrow the Green's function;
-  \item \texttt{auto} -- the depth is measured at start-up.  The candidates are
-    chosen from $k \in \{8, 16, 32, 64, 128, 256\}$, restricted to those
-    not exceeding $N_{\mathrm{dim}}$; for each of them the cost of one flush and
-    one panel reconstruction is timed at the $N_{\mathrm{dim}}$ of the model at
-    hand, and the largest candidate within 5\% of the cheapest cost is taken
-    (since overestimating the delay depth typically yields better performance).
-    The result is therefore explicitly sensitive to the machine and to the
-    loaded BLAS / LAPACK library.  Should the measurement fail, the closed form
-    below is used instead as a fallback, and the \texttt{info} file then
-    reports \texttt{formula};
+  \item \texttt{auto} -- whether to delay at all, and at which depth, is
+    measured at start-up.  The candidates are chosen from
+    $k \in \{8,\allowbreak 16,\allowbreak 32,\allowbreak 64,\allowbreak 128,\allowbreak 256\}$, restricted to those not exceeding
+    $N_{\mathrm{dim}}$; for each of them the cost of one flush and one panel
+    reconstruction is timed at the $N_{\mathrm{dim}}$ of the model at hand.
+    Beside them the immediate update itself is timed, as one rank-$d$ update of
+    the Green's function at the largest operator rank $d$ of the model: the
+    delayed cost per accepted update grows with $d$, whereas for small $d$ the
+    immediate one stays at about one pass over the matrix.  Unless the cheapest
+    candidate beats the immediate update by more than 5\%, the immediate update
+    is kept and the delay stays off; ties go to the immediate update, since the
+    timing leaves out overheads that only the delayed update pays.  Otherwise
+    the largest candidate within 5\% of the cheapest cost is taken (since
+    overestimating the delay depth typically yields better performance).  The
+    result is therefore explicitly sensitive to the machine and to the loaded
+    BLAS / LAPACK library.  Should the measurement fail, the closed form below is
+    used instead as a fallback, and the \texttt{info} file then reports
+    \texttt{formula};
   \item \texttt{formula} -- the closed form 
     $k \approx \sqrt{2 N_{\mathrm{dim}}}$ is used and is clamped to $[8, 256]$,
     never exceeding $N_{\mathrm{dim}}$; this is also the automatic probe's
@@ -152,7 +161,10 @@ The delayed update is selected by the environment variable
 The chain's delay depth and how it was arrived at
 (\texttt{off}, \texttt{fixed}, \texttt{probe} or \texttt{formula}) are written
 to each run's \texttt{info} file as \texttt{Delay depth} and
-\texttt{Delay depth from}.
+\texttt{Delay depth from}; a depth of 0 from \texttt{probe} means that
+\texttt{auto} found the immediate update faster.  The standard output
+additionally lists the probed costs, the immediate update among them as
+$k = 0$.
 %
 %------------------------------------------------------------
 \subsubsection{Sampling of $e^{-S_0}$}
