@@ -59,8 +59,9 @@ It is also worth noting that this type of sequential spin-flip updating does not
 %------------------------------------------------------------
 %
 Consider the sequential updates of the auxiliary fields. Each accepted update applies a
-rank-$d$ update to the whole Green's function, where $d$ is the range of the
-vertex, the operator dimension $N$ of Sec.~\ref{sec:op}. That update carries
+rank-$d$ update to the whole Green's function, where $d$ is the number of
+non-vanishing eigenvalues of the vertex operator, \texttt{Op\%N\_non\_zero}
+(Sec.~\ref{sec:op}); $d \le N$, the operator dimension. That update carries
 the arithmetic intensity of a level-2 BLAS operation (\texttt{ZGERU} for
 $d = 1$, a \texttt{ZGEMM} for $d>1$): it streams $N_{\mathrm{dim}}^2$
 complex entries to carry out $\mathcal{O}(d \, N_{\mathrm{dim}}^2)$
