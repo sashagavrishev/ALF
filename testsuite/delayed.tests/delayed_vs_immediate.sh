@@ -15,7 +15,9 @@
 # tolerance. An HDF5 build writes confout_0.h5 instead of confout_0; two such
 # files holding identical data still differ byte-for-byte (HDF5 tracks
 # per-object timestamps by default), so that variant is compared
-# dataset-by-dataset with h5diff rather than cmp.
+# dataset-by-dataset with h5diff rather than cmp. Without h5diff on the PATH
+# that comparison cannot be made, and the model is reported as skipped rather
+# than failed: a missing tool says nothing about the delayed update.
 #
 # Usage: delayed_vs_immediate.sh <ALF.out> <source dir> <work dir>
 
@@ -31,6 +33,7 @@ if [ ! -x "$exe" ]; then
 fi
 
 status=0
+skipped=0
 
 for model in hubbard tv; do
    for arm in immediate delayed; do
@@ -82,6 +85,11 @@ for model in hubbard tv; do
    diff_log=""
    case "$imm" in
       *.h5)
+         if ! command -v h5diff > /dev/null 2>&1; then
+            echo "SKIP: $model: h5diff not found, cannot compare HDF5 configurations"
+            skipped=1
+            continue
+         fi
          diff_log="$work/$model.h5diff.log"
          if h5diff "$imm" "$del" > "$diff_log" 2>&1; then identical=0; else identical=1; fi
          ;;
@@ -99,4 +107,8 @@ for model in hubbard tv; do
    fi
 done
 
+# A failure anywhere outranks a skip; a skip alone is reported as one (77).
+if [ "$status" -eq 0 ] && [ "$skipped" -ne 0 ]; then
+   exit 77
+fi
 exit $status
