@@ -178,9 +178,10 @@ contains
 !> Resolve the delay depth for this run; 0 when the delayed update is disabled.
 !>
 !> @details
-!> Reads ALF_DELAY_K:
+!> Reads ALF_DELAY_K, case-insensitively:
 !>
-!>    - unset, "0", negative or unreadable: delay off
+!>    - unset, empty, "0", negative, unreadable or over 32 characters: delay
+!>      off, with the reason in delay_log
 !>    - a positive integer: used verbatim, not clamped
 !>    - "formula": delay_formula, k ~ sqrt(2*Ndim)
 !>    - "auto": delay_probe times the flush and panel costs at this Ndim and
@@ -210,30 +211,41 @@ contains
 
       integer, intent(in) :: Ndim
       character (Len=32) :: text   ! ALF_DELAY_K as the environment gave it
-      character (Len=32) :: word   ! the same, trimmed, as matched below
+      character (Len=32) :: word   ! the same, trimmed and lower-cased
       integer :: length, status    ! from get_environment_variable
       integer :: value             ! the depth, where the request was a number
+      integer :: i
 
       k_request      = 0
       k_request_text = '<unset>'
       delay_source   = 'off'
 
       call get_environment_variable("ALF_DELAY_K", text, length, status)
-      if (status == 0 .and. length > 0) then
+      if (status == -1) then
+         ! Longer than text holds: turn delays off, but say so.
+         k_request_text = '<too long>'
+      else if (status == 0 .and. length > 0) then
          word           = trim(adjustl(text(1:length)))
          k_request_text = word
+         ! Capitalisation agnostic
+         do i = 1, len_trim(word)
+            if (word(i:i) >= 'A' .and. word(i:i) <= 'Z') &
+            &  word(i:i) = achar(iachar(word(i:i)) + 32)
+         enddo
          select case (word)
-          case ('auto', 'AUTO')
+          case ('auto')
             k_request = K_AUTO
-          case ('formula', 'FORMULA')
+          case ('formula')
             k_request = K_FORMULA
           case default
+            ! Unreadable or negative turns delays off, but say so.
             read (word, *, iostat=status) value
-            if (status == 0 .and. value >= 0) then
-               k_request = value
+            if (status /= 0) then
+               k_request_text = trim(k_request_text)//' (unreadable)'
+            else if (value < 0) then
+               k_request_text = trim(k_request_text)//' (negative)'
             else
-               ! When unreadable turn delays off, but say so.
-               k_request_text = trim(word)//' (unreadable)'
+               k_request = value
             endif
          end select
       endif
