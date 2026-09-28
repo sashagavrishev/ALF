@@ -36,43 +36,46 @@
 !-------------------------------------------------------------------------------
 !> @brief
 !> This module enables us to hold the Green's function in factored form across
-!> one time slice; an accepted flip will now append a column pair instead of
-!> updating the whole matrix. Thus this is a method of "delaying" the Green's
-!> function updates, with the aim of reducing the burden on the memory system of
-!> the execution environment.
+!> one imaginary time slice; an accepted update will now append a column pair
+!> instead of updating the whole matrix. Thus this is a method of "delaying" the
+!> Green's function updates, with the aim of reducing the burden on the memory
+!> system of the execution environment. This module is designed only for the
+!> sequential auxiliary field sampler.
 !>
 !> @details
-!> When a single-site sign flip is accepted a rank-d update has to be applied to
-!> the entire Green's function (see upgrade_mod). An "instantaneous" update
-!> requires a level-2 LAPACK operation at every such update, which is memory
-!> bandwidth bound and hence can cause performance degradation, especially
-!> on large matrix dimensions and when the compute environment is fully
-!> saturated by many other memory intensive jobs.
+!> When a proposed field change is accepted a rank-d update has to be applied to
+!> the entire Green's function (see upgrade_mod). An "instantaneous" scheme
+!> requires this rank-d BLAS operation at every such update, which is memory
+!> bandwidth bound and hence can cause performance degradation. This is
+!> especially true for large matrix dimensions and when the compute environment
+!> is fully saturated by many other memory intensive jobs.
 !>
-!> We can take advantage of the fact that subsequent Metropolis steps after
-!> acceptance do not require the full updated Green's function; we only need
+!> We can take advantage of the fact that no step of the sequential sweep needs
+!> the full Green's function, G. With P = Op%P and d = Op%N_non_zero:
 !>
-!>    - the d x d block G(P,P) to form the Metropolis ratio, where P refers
-!>      to Op%P
+!>    - every proposal, accepted or not, needs only the d x d block G(P,P)
+!>      to form the Metropolis ratio;
 !>
-!>    - when we accept another proposed update, d rows and d columns of G
+!>    - an accepted proposal additionally needs the d rows G(P,:) and d
+!>      columns G(:,P) of the same vertex, which form the factors of its
+!>      rank-d update.
 !>
-!> Thus we are at liberty to split the Green's function G into
+!> Thus we are at liberty to split the Green's function into
 !>
-!>             G = G_stale + X * Y^T,   X, Y of shape (Ndim, k)
+!>             G = G_stale + X * Y^T,   X, Y of shape (Ndim, ~k)
 !>
-!> and pay Ndim**2 only once every k accepted flips, through a level-3 LAPACK
-!> operation, ZGEMM. Traffic per accepted flip is then expected to fall
-!> from ~2*Ndim**2 to ~2*d*Ndim*k + 2*Ndim**2/k. The matrices X and Y are
-!> referred to as "panels". The scheme, including its generalisation to vertices
-!> of rank d > 1, follows F. Sun and X. Y. Xu, Phys. Rev. B 109, 235140 (2024);
-!> see the "Delayed (rank-k) updates" section of the ALF documentation.
+!> and pay Ndim**2 only once every k panel columns, i.e. every ~k/d accepted
+!> updates. Traffic per accepted field update is then expected to fall from
+!> ~2*Ndim**2 to ~2*d*Ndim*k + 2*d*Ndim**2/k.
+!> The matrices X and Y are referred to as "panels". The scheme, including its
+!> generalisation to vertices of rank d > 1, follows F. Sun and X. Y. Xu,
+!> Phys. Rev. B 109, 235140 (2024); see the "Delayed (rank-k) updates" section
+!> of the ALF documentation.
 !>
-!> The implementation is such that a Green's function is in its "factorised"
-!> form only within a single time slice; thus stabilisation, measurement and
-!> global-moves always receive the fully flushed G. Accumulated rounding errors
-!> from updating the factorised version on accepted sign flips persist only
-!> until the end of a time slice.
+!> The implementation is such that the Green's function is in its "factorised"
+!> form only within the sequential vertex loop of a single time slice;
+!> thus stabilisation, measurement and global moves always receive the fully
+!> flushed G.
 !>
 !> By default delayed updates are off. The environment variable ALF_DELAY_K set
 !> to the appropriate value enables it; see delay_depth for more details.
