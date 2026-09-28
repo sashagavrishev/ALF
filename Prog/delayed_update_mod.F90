@@ -149,7 +149,7 @@ module delayed_update_mod
    real (Kind=Kind(0.d0)), private, save :: probe_cost(N_CAND) = -1.d0
    real (Kind=Kind(0.d0)), private, save :: probe_seconds = 0.d0
    real (Kind=Kind(0.d0)), private, save :: probe_scratch_mb = 0.d0
-   character (Len=32),     private, save :: k_request_text = '<unset>'
+   character (Len=64),     private, save :: k_request_text = '<unset>'
 
    ! GR dummies are explicit shape so GR(1,1,nf) can go to BLAS as a
    ! contiguous matrix; an assumed shape would not guarantee that.
@@ -171,7 +171,7 @@ contains
 !>
 !>    - unset, empty, "0", negative, unreadable or over 32 characters: delay
 !>      off, with the reason in delay_log
-!>    - a positive integer: used verbatim, not clamped
+!>    - a positive integer: used verbatim up to Ndim, capped there
 !>    - "formula": delay_formula, k ~ sqrt(2*Ndim)
 !>    - "auto": delay_probe times the flush and panel costs at this Ndim and
 !>      takes the largest k within PROBE_MARGIN of the cheapest, falling back
@@ -251,6 +251,15 @@ contains
          delay_resolve = k_request
          delay_source  = 'fixed'
       end select
+      ! Past Ndim the panels outgrow G and buy nothing, so a depth beyond it is
+      ! capped there, and said so. This also keeps kmax + dmax well clear of
+      ! overflow in delay_alloc.
+      if (delay_resolve > Ndim) then
+         write (word, '(i0)') Ndim
+         k_request_text = trim(k_request_text)//' (capped at Ndim = '//trim(word)//')'
+         delay_resolve  = Ndim
+      endif
+
       ! Whichever path gave it, a zero depth is off.
       if (delay_resolve <= 0) delay_source = 'off'
 
@@ -580,7 +589,9 @@ contains
       ndim_s = Ndim
       nfl_s  = N_FL
 
-      kmax = max(k, 0)
+      ! Capped at Ndim as delay_resolve caps it, for callers that pass a depth
+      ! directly: kmax + dmax must not overflow.
+      kmax = min(max(k, 0), Ndim)
       if (kmax == 0) return ! No-op when delays are off
 
       panel_w = kmax + dmax

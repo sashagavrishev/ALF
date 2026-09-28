@@ -129,7 +129,8 @@ The delayed update is selected by the environment variable
 \texttt{ALF\_DELAY\_K}:
 \begin{itemize}
   \item unset or \texttt{0} -- disabled (default);
-  \item a positive integer -- the depth $k$ is fixed at that value;
+  \item a positive integer -- the depth $k$ is fixed at that value, capped at
+    $N_{\mathrm{dim}}$, beyond which the panels outgrow the Green's function;
   \item \texttt{auto} -- the depth is measured at start-up.  The candidates are
     chosen from $k \in \{8, 16, 32, 64, 128, 256\}$, restricted to those
     not exceeding $N_{\mathrm{dim}}$; for each of them the cost of one flush and
