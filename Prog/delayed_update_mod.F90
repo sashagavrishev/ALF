@@ -370,8 +370,9 @@ contains
 !> We notice here that d factors out; the result is operator rank independent.
 !> t_gemm and t_gemv are times that are probed at runtime.
 !>
-!> Falls back to delay_formula whenever the measurement fails: allocation
-!> refused, or a curve whose spread is small enough to be noise.
+!> Falls back to delay_formula when fewer than two candidates fit Ndim, the
+!> scratch cannot be allocated, the clock gives no reading, or the curve is
+!> flat to within PROBE_MARGIN.
 !-------------------------------------------------------------------------------
 
    integer function delay_probe(Ndim)
@@ -408,7 +409,8 @@ contains
       do i = 1, N_CAND
          if (K_CAND(i) <= Ndim) kwide = K_CAND(i)
       enddo
-      if (kwide < K_FLOOR) return
+      ! A curve needs at least two points.
+      if (kwide < K_CAND(2)) return
 
       allocate (g(Ndim,Ndim), xs(Ndim,kwide), ys(Ndim,kwide), &
       & v(kwide), w(Ndim), stat=stat)
@@ -428,7 +430,7 @@ contains
          do i = 1, N_CAND
             k = K_CAND(i)
             if (k > kwide) cycle
-            c  = max(1, k/2)
+            c  = k/2
             tg = probe_time(PROBE_FLUSH, g, xs, ys, v, w, Ndim, k)
             tv = probe_time(PROBE_PANEL, g, xs, ys, v, w, Ndim, c)
             this = tg/real(k, Kind(0.d0)) + 2.d0*tv
@@ -456,7 +458,7 @@ contains
       ! tends to give better performance on average.
       best = maxval(K_CAND, mask=(cost <= PROBE_MARGIN*lo))
 
-      delay_probe  = min(K_CEILING, max(K_FLOOR, best))
+      delay_probe  = best
       delay_source = 'probe'
    end function delay_probe
 
