@@ -4,9 +4,9 @@
 Author: A. Gavrishev <br>
 [GitHub](https://github.com/ALF-QMC/ALF/pull/646)
 
-The sequential single-spin-flip update can now hold the Green's function in the
+The sequential local update can now hold the Green's function in the
 factored form $G = G_{\rm stale} + X Y^T$ across one time slice, batching the
-rank-$d$ corrections of $k$ accepted flips into a single level-3 flush. See
+rank-$d$ corrections of successive accepted updates into a single level-3 flush. See
 Sec. "Delayed (rank-$k$) updates" in the ALF documentation.
 
 By default, the delayed update scheme is disabled. Enabling it requires setting the environment

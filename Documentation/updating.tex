@@ -58,17 +58,17 @@ It is also worth noting that this type of sequential spin-flip updating does not
 \label{sec:delayed}
 %------------------------------------------------------------
 %
-Consider sequential single spin flips. Each accepted spin flip applies a
+Consider the sequential updates of the auxiliary fields. Each accepted update applies a
 rank-$d$ update to the whole Green's function, where $d$ is the range of the
 vertex, the operator dimension $N$ of Sec.~\ref{sec:op}. That update carries
 the arithmetic intensity of a level-2 BLAS operation (\texttt{ZGERU} for
 $d = 1$, a \texttt{ZGEMM} for $d>1$): it streams $N_{\mathrm{dim}}^2$
 complex entries to carry out $\mathcal{O}(d \, N_{\mathrm{dim}}^2)$
 floating-point operations. At large dimensions of the Green's function, the
-Green's function updates on spin flip acceptance become bound by memory
+Green's function updates on acceptance become bound by memory
 bandwidth rather than by arithmetic, and this will cause performance
 degradation in most typical use cases. To alleviate this, we can exploit the
-fact that at the level of the spin flip proposals we do not require the updated
+fact that at the level of the individual proposals we do not require the updated
 Green's function to be stored as a full matrix. Instead, we just need the
 $d \times d$ block $\bm{P} G \bm{P}^{T}$ of the Green's function on the support
 of the vertex -- the rows and columns listed in \texttt{Op\%P} -- to form the
@@ -81,7 +81,7 @@ Therefore, following Ref.~\cite{Sun2024}, we can hold the Green's function in a
   \qquad X, Y \in \mathbb{C}^{N_{\mathrm{dim}} \times k},
 \end{equation}
 where $k$ is a chosen ``delay depth''.
-If a flip is accepted we append $d$ columns to the ``panels'' $X$ and $Y$
+If an update is accepted we append $d$ columns to the ``panels'' $X$ and $Y$
 and the block, rows and columns are reconstructed
 on demand at a cost of $\mathcal{O}(d^2 k)$ and
 $\mathcal{O}(N_{\mathrm{dim}} d k)$, respectively. Once the panels hold $k$ or
@@ -113,7 +113,7 @@ floating-point arithmetic is not associative, so some numerical deviation is
 expected between the immediate path and a delayed one, and between different
 depths $k$. The acceptance ratios still agree to rounding
 error, so both
-schemes accept the same flips and write an identical \texttt{confout} -- an
+schemes accept the same updates and write an identical \texttt{confout} -- an
 exact equality checked in \path{testsuite/delayed.tests}. The one exception is a
 Metropolis ``near-tie'': a proposal whose acceptance ratio falls within rounding
 of the random number it is compared against. The immediate run meets such

@@ -187,7 +187,7 @@ contains
 !> system they are measuring.
 !>
 !> A measured depth may differ between runs of one chain. This is harmless:
-!> different k give the same chain up to rounding, which can only flip
+!> different k give the same chain up to rounding, which can only change
 !> Metropolis decisions that are near-ties.
 !>
 !> The depth is deliberately not a simulation parameter, so that a
@@ -350,9 +350,9 @@ contains
 !> Pick the delay depth by timing the two k-dependent costs at this Ndim.
 !>
 !> @details
-!> Per accepted flip the delayed scheme pays a flush ZGEMM('N','T',Ndim,Ndim,k)
-!> once every k/d flips, and 2*d panel ZGEMVs against a panel that is half full
-!> on average:
+!> Per accepted update the delayed scheme pays a flush,
+!> ZGEMM('N','T',Ndim,Ndim,k), once every k/d updates, and 2*d panel ZGEMVs
+!> against a panel that is half full on average:
 !>
 !>     cost(k) = t_gemm(k)*d/k + 2*d*t_gemv(k/2)
 !>             = d * [ t_gemm(k)/k + 2*t_gemv(k/2) ]
@@ -381,9 +381,9 @@ contains
       complex (Kind=Kind(0.d0)), allocatable :: g(:,:), xs(:,:), ys(:,:)
       complex (Kind=Kind(0.d0)), allocatable :: v(:), w(:)
 
-      ! cost(i) is the modelled per-flip cost at K_CAND(i), built from the flush
-      ! time tg and the panel time tv of one reading, this. lo and hi bound the
-      ! finished curve.
+      ! cost(i) is the modelled per-update cost at K_CAND(i), built from the
+      ! flush time tg and the panel time tv of one reading, this. lo and hi
+      ! bound the finished curve.
       real (Kind=Kind(0.d0)) :: cost(N_CAND), tg, tv, lo, hi, this
 
       ! k is the candidate depth, c the half occupancy the panel is timed at,

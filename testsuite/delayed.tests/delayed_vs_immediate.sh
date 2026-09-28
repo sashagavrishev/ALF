@@ -11,7 +11,7 @@
 # Here a sampler is run twice on each parameter set, once with the delay off and
 # once with it on, from the same seeds. We require the auxiliary field
 # configuration left behind to be identical. Up to Metropolis near-ties the
-# two schemes accept exactly the same flips, so this is an equality and not a
+# two schemes accept exactly the same updates, so this is an equality and not a
 # tolerance. An HDF5 build writes confout_0.h5 instead of confout_0; two such
 # files holding identical data still differ byte-for-byte (HDF5 tracks
 # per-object timestamps by default), so that variant is compared

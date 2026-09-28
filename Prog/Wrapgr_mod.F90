@@ -83,8 +83,9 @@ Contains
 !> Allocate the delayed update's panels. No-op when the delay is off.
 !> @details
 !> Separate from Wrapgr_alloc, which main only calls when N_Global_tau > 0
-!> because GR_ST exists solely for the multi-flip restore. The panels instead
-!> serve the sequential vertex loop, so main calls this whenever that loop runs.
+!> because GR_ST exists solely to restore a rejected multi-vertex move. The
+!> panels instead serve the sequential vertex loop, so main calls this whenever
+!> that loop runs.
 !>
 !> Collective over Group_Comm: under "auto" the depth is resolved by timing on
 !> rank 0 alone and broadcast, so that the ranks sharing a node neither each
