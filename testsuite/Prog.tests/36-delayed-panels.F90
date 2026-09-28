@@ -39,7 +39,7 @@ Program DelayedPanels
    d     = 2
    P     = [3, 6]
 
-   k = delay_resolve(Ndim)
+   k = delay_resolve(Ndim, dmax)
    If (k /= kdepth) Then
       Write (*,*) "ERROR: ALF_DELAY_K must be", kdepth, "for this test; got", k
       Stop 2

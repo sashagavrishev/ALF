@@ -114,13 +114,13 @@ Contains
     source = 'off'
     call MPI_Comm_rank(Group_Comm, irank_l, ierr)
     if (irank_l == 0) then
-       k      = delay_resolve(Ndim)
+       k      = delay_resolve(Ndim, dmax)
        source = delay_source
     endif
     call MPI_Bcast(k,      1,  MPI_INTEGER,   0, Group_Comm, ierr)
     call MPI_Bcast(source, 16, MPI_CHARACTER, 0, Group_Comm, ierr)
 #else
-    k      = delay_resolve(Ndim)
+    k      = delay_resolve(Ndim, dmax)
     source = delay_source
 #endif
     call delay_alloc(Ndim, N_FL, dmax, k)

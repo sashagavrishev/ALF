@@ -41,7 +41,7 @@ Program DelayedDepthCap
    Read (arg, *) capped_expected
 
    ! delay_resolve: the depth, and whether delay_log says it was capped.
-   k = delay_resolve(Ndim)
+   k = delay_resolve(Ndim, dmax)
    If (k /= k_expected) Then
       Write (*,*) "ERROR: delay_resolve returned", k, "expected", k_expected
       nfail = nfail + 1

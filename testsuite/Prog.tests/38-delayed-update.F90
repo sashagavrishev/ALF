@@ -54,7 +54,7 @@ Program DelayedUpdate
    one   = cmplx(1.d0, 0.d0, kind(0.D0))
    nfail = 0
 
-   k = delay_resolve(Ndim)
+   k = delay_resolve(Ndim, dmax)
    If (k /= kdepth) Then
       Write (*,*) "ERROR: ALF_DELAY_K must be", kdepth, "for this test; got", k
       Stop 2

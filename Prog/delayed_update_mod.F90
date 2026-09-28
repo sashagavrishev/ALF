@@ -144,9 +144,12 @@ module delayed_update_mod
    ! Kernel selector for the flush / panel
    integer, private, parameter :: PROBE_FLUSH = 1 ! stand in for delay_flush
    integer, private, parameter :: PROBE_PANEL = 2 ! stand in for delay_row/col
+   integer, private, parameter :: PROBE_IMMEDIATE = 3 ! stand in for Upgrade2's
+                                                      ! immediate rank-d update
 
    ! Details for the delay_log
    real (Kind=Kind(0.d0)), private, save :: probe_cost(N_CAND) = -1.d0
+   real (Kind=Kind(0.d0)), private, save :: probe_imm_cost = -1.d0
    real (Kind=Kind(0.d0)), private, save :: probe_seconds = 0.d0
    real (Kind=Kind(0.d0)), private, save :: probe_scratch_mb = 0.d0
    character (Len=64),     private, save :: k_request_text = '<unset>'
@@ -174,8 +177,10 @@ contains
 !>    - a positive integer: used verbatim up to Ndim, capped there
 !>    - "formula": delay_formula, k ~ sqrt(2*Ndim)
 !>    - "auto": delay_probe times the flush and panel costs at this Ndim and
-!>      takes the largest k within PROBE_MARGIN of the cheapest, falling back
-!>      to delay_formula if the measurement is impossible or inconclusive
+!>      rank dmax against the immediate update. It keeps the immediate update
+!>      (k = 0) unless some depth beats it by PROBE_MARGIN, else takes the
+!>      largest k within PROBE_MARGIN of the cheapest, falling back to
+!>      delay_formula if the measurement is impossible or inconclusive
 !>
 !> "formula" and "auto" are clamped to [K_FLOOR, K_CEILING], and turn the delay
 !> off when Ndim < K_FLOOR. Also sets delay_source and what delay_log reports.
@@ -194,11 +199,12 @@ contains
 !> run-to-run choice does not show up as a difference between runs' parameters.
 !-------------------------------------------------------------------------------
 
-   integer function delay_resolve(Ndim)
+   integer function delay_resolve(Ndim, dmax)
 
       implicit none
 
       integer, intent(in) :: Ndim
+      integer, intent(in) :: dmax  ! largest rank one update appends, for "auto"
       character (Len=32) :: text   ! ALF_DELAY_K as the environment gave it
       character (Len=32) :: word   ! the same, trimmed and lower-cased
       integer :: length, status    ! from get_environment_variable
@@ -246,7 +252,7 @@ contains
        case (K_AUTO)
          ! delay_probe sets delay_source itself, since it may have to fall back
          ! to the formula.
-         delay_resolve = delay_probe(Ndim)
+         delay_resolve = delay_probe(Ndim, dmax)
        case default
          delay_resolve = k_request
          delay_source  = 'fixed'
@@ -263,10 +269,15 @@ contains
       ! Whichever path gave it, a zero depth is off.
       if (delay_resolve <= 0) delay_source = 'off'
 
-      ! A named request only resolves to zero on a matrix below the floor.
+      ! A named request resolves to zero on a matrix below the floor, or when
+      ! the probe found the immediate update faster.
       if (delay_resolve <= 0 .and. k_request < 0) then
-         write (word, '(i0)') K_FLOOR
-         k_request_text = trim(k_request_text)//' (Ndim < '//trim(word)//')'
+         if (Ndim < K_FLOOR) then
+            write (word, '(i0)') K_FLOOR
+            k_request_text = trim(k_request_text)//' (Ndim < '//trim(word)//')'
+         else
+            k_request_text = trim(k_request_text)//' (probe: immediate faster)'
+         endif
       endif
    end function delay_resolve
 
@@ -356,48 +367,60 @@ contains
 
 !-------------------------------------------------------------------------------
 !> @brief
-!> Pick the delay depth by timing the two k-dependent costs at this Ndim.
+!> Pick the delay depth, or no delay, by timing both schemes at this Ndim.
 !>
 !> @details
-!> Per accepted update the delayed scheme pays a flush,
+!> Per accepted update of rank d the delayed scheme pays a flush,
 !> ZGEMM('N','T',Ndim,Ndim,k), once every k/d updates, and 2*d panel ZGEMVs
 !> against a panel that is half full on average:
 !>
 !>     cost(k) = t_gemm(k)*d/k + 2*d*t_gemv(k/2)
 !>             = d * [ t_gemm(k)/k + 2*t_gemv(k/2) ]
 !>
-!> We notice here that d factors out: the result is operator rank independent.
-!> t_gemm and t_gemv are times that are probed at runtime.
+!> The immediate scheme instead pays one rank-d update of G, t_imm(d): ZGERU
+!> for d = 1 and ZGEMM('N','T',Ndim,Ndim,d) otherwise, as Upgrade2 does. d
+!> factors out between candidate depths but not against t_imm -- with d small an
+!> immediate rank-d update is still about one pass over G -- so the probe is
+!> timed at d = dmax, the largest rank of the model. t_gemm, t_gemv and t_imm
+!> are probed at runtime.
+!>
+!> The model leaves out what only the delayed scheme pays -- the d x d block
+!> per proposal, the panel wrap per vertex, the partial flush that closes a
+!> slice -- so it flatters the delay, and delay_probe_pick breaks ties towards
+!> the immediate update.
 !>
 !> Timed on an otherwise idle node (under MPI one rank probes, the rest wait).
 !> Under full load the flush slows more than the cache-resident panel, so the
-!> true optimum lies somewhat higher; one reason ties go to the larger k.
+!> true optimum lies somewhat higher; one reason ties between depths go to the
+!> larger k.
 !>
-!> Falls back to delay_formula when fewer than two candidates fit Ndim, the
-!> scratch cannot be allocated, the clock gives no reading, or the curve is
-!> flat to within PROBE_MARGIN.
+!> Falls back to delay_formula when no candidate fits Ndim, the scratch cannot
+!> be allocated, or the clock gives no reading; see delay_probe_pick for the
+!> rest.
 !-------------------------------------------------------------------------------
 
-   integer function delay_probe(Ndim)
+   integer function delay_probe(Ndim, dmax)
 
       implicit none
 
       integer, intent(in) :: Ndim
+      integer, intent(in) :: dmax   ! largest rank one update appends
 
       ! Scratch the kernels run on: g stands in for the Green's function, xs
-      ! and ys for the panels, v for a row of one panel and w for the
-      ! rebuilt row / column.
+      ! and ys for the panels (and for the factors of an immediate update), v
+      ! for a row of one panel and w for the rebuilt row / column.
       complex (Kind=Kind(0.d0)), allocatable :: g(:,:), xs(:,:), ys(:,:)
       complex (Kind=Kind(0.d0)), allocatable :: v(:), w(:)
 
-      ! cost(i) is the modelled per-update cost at K_CAND(i), built from the
-      ! flush time tg and the panel time tv of one reading, this.
-      real (Kind=Kind(0.d0)) :: cost(N_CAND), tg, tv, this
+      ! cost(i) is the modelled per-column cost at K_CAND(i), built from the
+      ! flush time tg and the panel time tv of one reading, this. t_imm is the
+      ! time of one immediate rank-dmax update.
+      real (Kind=Kind(0.d0)) :: cost(N_CAND), tg, tv, this, t_imm
 
       ! k is the candidate depth, c the half occupancy the panel is timed at,
-      ! kwide the widest candidate that fits Ndim and so the width allocated,
+      ! kwide the widest candidate that fits Ndim, ncols the width allocated,
       ! stat the allocation status.
-      integer :: i, k, c, kwide, stat, sweep
+      integer :: i, k, c, kwide, ncols, stat, sweep
 
       ! Wall clock over the whole ladder, which delay_log reports.
       integer (Kind=8) :: wall0, wall1, wall_rate
@@ -406,34 +429,39 @@ contains
       delay_source = 'formula'
       delay_probe  = delay_formula(Ndim)
 
-      ! No candidate may exceed Ndim
+      ! No candidate may exceed Ndim. One is enough: a single depth can still be
+      ! set against the immediate update, even without a curve to choose from.
       kwide = 0
       do i = 1, N_CAND
          if (K_CAND(i) <= Ndim) kwide = K_CAND(i)
       enddo
-      ! A curve needs at least two points.
-      if (kwide < K_CAND(2)) return
+      if (kwide < K_CAND(1)) return
+      ncols = max(kwide, dmax)
 
-      allocate (g(Ndim,Ndim), xs(Ndim,kwide), ys(Ndim,kwide), &
+      allocate (g(Ndim,Ndim), xs(Ndim,ncols), ys(Ndim,ncols), &
       & v(kwide), w(Ndim), stat=stat)
       if (stat /= 0) return
 
       ! Everything just allocated, at 16 bytes per complex entry.
       probe_scratch_mb = 16.d0*(real(Ndim, Kind(0.d0))**2 &
-      &                  + 2.d0*real(Ndim*kwide, Kind(0.d0)) &
+      &                  + 2.d0*real(Ndim, Kind(0.d0))*real(ncols, Kind(0.d0)) &
       &                  + real(kwide + Ndim, Kind(0.d0)))/1048576.d0
 
       call probe_fill(g,  Ndim*Ndim)
-      call probe_fill(xs, Ndim*kwide)
-      call probe_fill(ys, Ndim*kwide)
+      call probe_fill(xs, Ndim*ncols)
+      call probe_fill(ys, Ndim*ncols)
       call probe_fill(v,  kwide)
       call probe_fill(w,  Ndim)
 
-      cost = huge(1.d0)
+      cost  = huge(1.d0)
+      t_imm = huge(1.d0)
 
       call system_clock(wall0)
 
+      ! The immediate update is timed in every sweep beside the candidates, so
+      ! that both schemes see the same cache and background.
       do sweep = 1, PROBE_SWEEPS
+         t_imm = min(t_imm, probe_time(PROBE_IMMEDIATE, g, xs, ys, v, w, Ndim, dmax))
          do i = 1, N_CAND
             k = K_CAND(i)
             if (k > kwide) cycle
@@ -451,10 +479,12 @@ contains
       if (wall_rate > 0) probe_seconds = &
       & real(wall1 - wall0, Kind(0.d0))/real(wall_rate, Kind(0.d0))
       probe_cost = cost
+      ! Per column, on the same scale as probe_cost, for delay_log.
+      probe_imm_cost = t_imm/real(dmax, Kind(0.d0))
 
       deallocate (g, xs, ys, v, w)
 
-      delay_probe = delay_probe_pick(cost, Ndim, delay_source)
+      delay_probe = delay_probe_pick(cost, t_imm, dmax, Ndim, delay_source)
    end function delay_probe
 
 !-------------------------------------------------------------------------------
@@ -463,18 +493,27 @@ contains
 !>
 !> @details
 !> Kept apart from the timing so that it can be tested on made-up curves.
-!> cost(i) is the modelled per-update cost at K_CAND(i), with huge(1.d0) for a
-!> candidate that was not timed.
+!> cost(i) is the modelled per-column cost at K_CAND(i), with huge(1.d0) for a
+!> candidate that was not timed; t_imm is the time of one immediate update of
+!> rank d, which the best candidate costs d times over. In order:
 !>
-!> Falls back to delay_formula, with source 'formula', when the curve holds no
-!> usable reading or is flat to within PROBE_MARGIN. Otherwise takes the
-!> largest candidate within PROBE_MARGIN of the cheapest, with source 'probe':
-!> overshooting tends to give better performance on average.
+!>    - no usable reading, of the curve or of t_imm: delay_formula, with source
+!>      'formula'
+!>    - the immediate update within PROBE_MARGIN of the best candidate, or
+!>      cheaper: 0, with source 'probe'. Ties go to the immediate update, the
+!>      simpler path, and the one the cost model does not flatter.
+!>    - a curve flat to within PROBE_MARGIN: delay_formula, with source
+!>      'formula'; any depth then costs about the best, which beats t_imm.
+!>    - otherwise the largest candidate within PROBE_MARGIN of the cheapest,
+!>      with source 'probe': overshooting tends to give better performance on
+!>      average.
 !-------------------------------------------------------------------------------
 
-   integer function delay_probe_pick(cost, Ndim, source)
+   integer function delay_probe_pick(cost, t_imm, d, Ndim, source)
       implicit none
       real (Kind=Kind(0.d0)), intent(in)  :: cost(N_CAND)
+      real (Kind=Kind(0.d0)), intent(in)  :: t_imm   ! one immediate update
+      integer,                intent(in)  :: d       ! its rank
       integer,                intent(in)  :: Ndim
       character (Len=*),      intent(out) :: source
       real (Kind=Kind(0.d0)) :: lo, hi   ! bounds of the timed part of the curve
@@ -483,12 +522,25 @@ contains
       source           = 'formula'
       delay_probe_pick = delay_formula(Ndim)
 
+      ! Nothing timed, or a clock that gave no reading.
+      if (count(cost < huge(1.d0)) == 0) return
+      if (t_imm <= 0.d0 .or. t_imm >= huge(1.d0)) return
+
       ! Bounds of the curve; untimed candidates sit at "huge".
       lo = minval(cost, mask=(cost < huge(1.d0)))
       hi = maxval(cost, mask=(cost < huge(1.d0)))
+      if (lo <= 0.d0) return
+
+      ! Checked before the flat curve, which would otherwise turn the delay on
+      ! without ever asking whether it pays.
+      if (t_imm <= PROBE_MARGIN*real(d, Kind(0.d0))*lo) then
+         delay_probe_pick = 0
+         source           = 'probe'
+         return
+      endif
 
       ! When the curve is flat prefer the formula.
-      if (lo <= 0.d0 .or. hi < PROBE_MARGIN*lo) return
+      if (hi < PROBE_MARGIN*lo) return
 
       delay_probe_pick = maxval(K_CAND, mask=(cost <= PROBE_MARGIN*lo))
       source           = 'probe'
@@ -521,15 +573,17 @@ contains
 !>
 !> @details
 !> PROBE_FLUSH times one flush ZGEMM('N','T',Ndim,Ndim,n), PROBE_PANEL one
-!> panel ZGEMV against n live columns. A clock reporting no rate returns zero,
+!> panel ZGEMV against n live columns, and PROBE_IMMEDIATE one immediate update
+!> of rank n, as Upgrade2 makes it. A clock reporting no rate returns zero,
 !> which delay_probe reads as a failed measurement.
 !-------------------------------------------------------------------------------
 
    real (Kind=Kind(0.d0)) function probe_time(kernel, g, xs, ys, v, w, Ndim, n)
       implicit none
-      ! kernel is PROBE_FLUSH or PROBE_PANEL; n is the depth k for the flush
-      ! and the live column count for the panel. Both arms take every array so
-      ! the two calls in delay_probe read alike.
+      ! kernel is PROBE_FLUSH, PROBE_PANEL or PROBE_IMMEDIATE; n is the depth k
+      ! for the flush, the live column count for the panel and the rank for the
+      ! immediate update. Every arm takes every array so that the calls in
+      ! delay_probe read alike.
       integer, intent(in) :: kernel, Ndim, n
       complex (Kind=Kind(0.d0)), intent(inout) :: g(Ndim,Ndim), w(Ndim)
       complex (Kind=Kind(0.d0)), intent(in)    :: xs(Ndim,*), ys(Ndim,*), v(*)
@@ -540,6 +594,11 @@ contains
          call system_clock(c0)
          do rep = 1, reps
             if (kernel == PROBE_FLUSH) then
+               call ZGEMM('N', 'T', Ndim, Ndim, n, ZONE, xs, Ndim, &
+               &          ys, Ndim, ZONE, g, Ndim)
+            else if (kernel == PROBE_IMMEDIATE .and. n == 1) then
+               call ZGERU(Ndim, Ndim, ZONE, xs, 1, ys, 1, g, Ndim)
+            else if (kernel == PROBE_IMMEDIATE) then
                call ZGEMM('N', 'T', Ndim, Ndim, n, ZONE, xs, Ndim, &
                &          ys, Ndim, ZONE, g, Ndim)
             else
