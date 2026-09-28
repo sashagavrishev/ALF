@@ -66,7 +66,7 @@
 !>
 !> and pay Ndim**2 only once every k panel columns, i.e. every ~k/d accepted
 !> updates. Traffic per accepted field update is then expected to fall from
-!> ~2*Ndim**2 to ~2*d*Ndim*k + 2*d*Ndim**2/k.
+!> ~2*Ndim**2 to ~d*Ndim*k + 2*d*Ndim**2/k.
 !> The matrices X and Y are referred to as "panels". The scheme, including its
 !> generalisation to vertices of rank d > 1, follows F. Sun and X. Y. Xu,
 !> Phys. Rev. B 109, 235140 (2024); see the "Delayed (rank-k) updates" section
@@ -331,9 +331,11 @@ contains
 !> The closed-form depth: nint(sqrt(2*Ndim)), clamped.
 !>
 !> @details
-!> This formula is built on the assumption that the memory bandwith will cancel
-!> between the panel contribution and the Green's function flush which may not
-!> be true in practice.
+!> Minimises the traffic per accepted update, d*Ndim*k for the panel
+!> reconstructions (2*d ZGEMVs against a half-full panel) plus 2*d*Ndim**2/k
+!> for the flush; d cancels. It assumes both terms move bytes at the same
+!> cost. In practice the panel is often cache-resident and the flush partly
+!> compute-bound, so the true optimum tends to lie above this estimate.
 !-------------------------------------------------------------------------------
 
    integer function delay_formula(Ndim)
