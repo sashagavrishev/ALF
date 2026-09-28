@@ -6,7 +6,8 @@
 # reach is Upgrade2's delayed branch, which links those routines to the
 # Woodbury chain: the reconstructed rows feed v, the reconstructed columns feed
 # the rank-d update, and a mistake there produces a plausible chain rather
-# than an obviously wrong one.
+# than an obviously wrong one. Nor can they reach delay_assert_inactive, which
+# guards the global-in-tau moves; the z2matter set is here for that.
 #
 # Here a sampler is run twice on each parameter set, once with the delay off and
 # once with it on, from the same seeds. We require the auxiliary field
@@ -35,7 +36,7 @@ fi
 status=0
 skipped=0
 
-for model in hubbard tv; do
+for model in hubbard tv z2matter; do
    for arm in immediate delayed; do
       dir="$work/$model.$arm"
       rm -rf "$dir"
@@ -80,6 +81,23 @@ for model in hubbard tv; do
       echo "FAIL: $model: delayed run reports delay depth '${depth:-<none>}', expected 8"
       status=1
       continue
+   fi
+
+   # Likewise for a set that enables global-in-tau moves to reach
+   # delay_assert_inactive: the Hamiltonian may override the sampling window, so
+   # require that the run both kept a sequential range, where the delay opens,
+   # and did global moves after it, where the assertion sits.
+   if grep -iq '^ *Global_tau_moves *= *\.T\.' "$src/parameters_$model"; then
+      info="$work/$model.delayed/info"
+      seq_start=$(awk '/Nt_sequential_start:/{print $(NF)}' "$info")
+      seq_end=$(awk '/Nt_sequential_end  :/{print $(NF)}' "$info")
+      n_global=$(awk '/N_Global_tau       :/{print $(NF)}' "$info")
+      if [ "${n_global:-0}" -le 0 ] || [ "${seq_end:-0}" -lt "${seq_start:-1}" ]; then
+         echo "FAIL: $model: expected sequential and global-in-tau moves, info reports" \
+              "Nt_sequential ${seq_start:-?}..${seq_end:-?}, N_Global_tau ${n_global:-<none>}"
+         status=1
+         continue
+      fi
    fi
 
    diff_log=""
