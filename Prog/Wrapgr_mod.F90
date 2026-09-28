@@ -101,12 +101,11 @@ Contains
 #ifdef MPI
     Integer :: irank_l, ierr
 #endif
-    ! Widest wrap support in the model. Op%N, not Op%N_non_zero: the conjugation
-    ! the panels have to follow touches all N rows.
+    ! Most panel columns one accepted update appends: its rank, Op%N_non_zero.
     dmax = 1
     do nf = 1, N_FL
        do n = 1, Size(Op_V,1)
-          if (Op_V(n,nf)%N > dmax) dmax = Op_V(n,nf)%N
+          if (Op_V(n,nf)%N_non_zero > dmax) dmax = Op_V(n,nf)%N_non_zero
        enddo
     enddo
 #ifdef MPI

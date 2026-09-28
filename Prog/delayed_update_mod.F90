@@ -570,17 +570,13 @@ contains
 
 !-------------------------------------------------------------------------------
 !> @brief
-!> Allocate the panels. No-op when the delay is disabled.
+!> Allocate the panels, kmax + dmax columns wide; no-op when k <= 0.
 !>
-!> @param[in] dmax Largest wrap support, maxval(Op_V(:,:)%N).
-!> @param[in] k    The depth, from delay_resolve; 0 or less leaves the delay off.
+!> @param[in] dmax Most columns one update appends, maxval(Op_V%N_non_zero).
+!> @param[in] k    The depth, from delay_resolve.
 !>
 !> @details
-!> The width is kmax + dmax, not kmax: a flip is appended first and the panel
-!> flushed afterwards, so the last append of a period must fit.
-!>
-!> dmax is the *wrap* support Op%N, not the update support Op%N_non_zero. The
-!> two differ (N_non_zero <= N) and the conjugation touches all N rows.
+!> The extra dmax columns hold the append that crosses kmax before its flush.
 !-------------------------------------------------------------------------------
 
    subroutine delay_alloc(Ndim, N_FL, dmax, k)
@@ -594,7 +590,7 @@ contains
       kmax = max(k, 0)
       if (kmax <= 0) return
 
-      panel_w = kmax + max(dmax, 1)
+      panel_w = kmax + dmax
       allocate (xp(Ndim, panel_w, N_FL), yp(Ndim, panel_w, N_FL))
       allocate (ncol(N_FL))
       ncol   = 0
