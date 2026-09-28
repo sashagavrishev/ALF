@@ -104,7 +104,7 @@ module delayed_update_mod
    integer, private, save :: kmax    = 0 ! Flush threshold, the k of the scheme
    integer, private, save :: panel_w = 0 ! Allocated panel width, kmax + dmax
    integer, private, save :: ndim_s  = 0 ! Ndim, recorded for the GR dummies
-   integer, private, save :: nfl_s   = 0 ! N_FL, likewise
+   integer, private, save :: nfl_s   = 0 ! N_FL, recorded for the GR dummies
 
    ! Record if a factored region is open
    logical, public, protected, save :: delay_active = .false.
@@ -115,17 +115,14 @@ module delayed_update_mod
    integer, private, parameter :: K_FORMULA = -2 ! "formula": k ~ sqrt(2*Ndim)
    integer, private, save      :: k_request = 0
 
-   ! Constants on the depth "auto" may resolve to: a ceiling and floor on the
-   ! possible delay depths we can set.
+   ! Constants on the depth "auto" may resolve to: a floor and ceiling.
    integer, private, parameter :: K_FLOOR   = 8
    integer, private, parameter :: K_CEILING = 256
 
-   ! How the depth in force was arrived at, for the info file: off, fixed,
-   ! probe or formula. Protected rather than behind an accessor, since
-   ! Wrapgr_mod hands it straight to Control_set_delay_depth.
+   ! How the depth was chosen, for the info file: off, fixed, probe or formula.
    character (Len=16), public, protected, save :: delay_source = 'off'
 
-   ! Depths the delay depth probe times, ascending.
+   ! Depths the delay depth probe times.
    integer, private, parameter :: K_CAND(*) = [8, 16, 32, 64, 128, 256]
    integer, private, parameter :: N_CAND = size(K_CAND)
 
@@ -133,7 +130,7 @@ module delayed_update_mod
    real (Kind=Kind(0.d0)), private, parameter :: PROBE_MIN_SECONDS = 5.d-3
    integer,                private, parameter :: PROBE_MAX_REPS    = 4096
 
-   ! Sweep the probe multiple times to average over the background of the
+   ! Sweep the probe three times to average over the background of the
    ! execution environment.
    integer, private, parameter :: PROBE_SWEEPS = 3
 
@@ -145,27 +142,23 @@ module delayed_update_mod
    complex (Kind=Kind(0.d0)), private, parameter :: ZONE = (1.d0, 0.d0)
 
    ! Kernel selector for the flush / panel
-   integer, private, parameter :: PROBE_FLUSH = 1
-   integer, private, parameter :: PROBE_PANEL = 2
+   integer, private, parameter :: PROBE_FLUSH = 1 ! stand in for delay_flush
+   integer, private, parameter :: PROBE_PANEL = 2 ! stand in for delay_row/col
 
-   ! Details for the delay_log: the probe's cost per candidate (-1 where it
-   ! never ran), its own wall clock, and ALF_DELAY_K as it was given.
+   ! Details for the delay_log
    real (Kind=Kind(0.d0)), private, save :: probe_cost(N_CAND) = -1.d0
    real (Kind=Kind(0.d0)), private, save :: probe_seconds = 0.d0
    real (Kind=Kind(0.d0)), private, save :: probe_scratch_mb = 0.d0
    character (Len=32),     private, save :: k_request_text = '<unset>'
 
-   ! Every GR dummy below is explicit shape rather than assumed shape. The
-   ! arrays are handed element-first to ZGEMM and ZCOPY, which have no explicit
-   ! interface, and sequence association from an assumed-shape actual is not
-   ! something the standard guarantees -- a compiler may pass a descriptor or a
-   ! copy. upgrade_mod declares the same array the same way for the same
-   ! reason.
+   ! GR dummies are explicit shape so GR(1,1,nf) can go to BLAS as a
+   ! contiguous matrix; an assumed shape would not guarantee that.
 
-   ! Argument names shared by the routines below: nf is the flavour, d the rank
-   ! of the vertex being applied -- its number of column pairs -- and P(d) the
-   ! operator's support Op%P, the rows and columns of G that vertex touches.
-   ! The local c is that flavour's live column count, ncol(nf).
+   ! Argument names shared by the routines below:
+   !    nf   - flavour
+   !    d    - column pairs per update, Op%N_non_zero (or 1)
+   !    P(d) - leading entries of Op%P, the rows and columns updated
+   !    c    - local; live panel columns, ncol(nf)
 
 contains
 
@@ -278,7 +271,7 @@ contains
 
    subroutine delay_log(unit)
       implicit none
-      integer, intent(in) :: unit      ! where to write; main passes 6
+      integer, intent(in) :: unit      ! where to write; main passes 6 (stdout)
       integer :: i
       real (Kind=Kind(0.d0)) :: lo          ! best cost, the curve's normaliser
       character (Len=13) :: mark, tag       ! marker for the depth in force
@@ -364,8 +357,12 @@ contains
 !>     cost(k) = t_gemm(k)*d/k + 2*d*t_gemv(k/2)
 !>             = d * [ t_gemm(k)/k + 2*t_gemv(k/2) ]
 !>
-!> We notice here that d factors out; the result is operator rank independent.
+!> We notice here that d factors out: the result is operator rank independent.
 !> t_gemm and t_gemv are times that are probed at runtime.
+!>
+!> Timed on an otherwise idle node (under MPI one rank probes, the rest wait).
+!> Under full load the flush slows more than the cache-resident panel, so the
+!> true optimum lies somewhat higher; one reason ties go to the larger k.
 !>
 !> Falls back to delay_formula when fewer than two candidates fit Ndim, the
 !> scratch cannot be allocated, the clock gives no reading, or the curve is
@@ -379,8 +376,8 @@ contains
       integer, intent(in) :: Ndim
 
       ! Scratch the kernels run on: g stands in for the Green's function, xs
-      ! and ys for the panels, v for a panel coefficient vector and w for the
-      ! ZGEMV target.
+      ! and ys for the panels, v for a row of one panel and w for the
+      ! rebuilt row / column.
       complex (Kind=Kind(0.d0)), allocatable :: g(:,:), xs(:,:), ys(:,:)
       complex (Kind=Kind(0.d0)), allocatable :: v(:), w(:)
 
@@ -436,8 +433,7 @@ contains
             tg = probe_time(PROBE_FLUSH, g, xs, ys, v, w, Ndim, k)
             tv = probe_time(PROBE_PANEL, g, xs, ys, v, w, Ndim, c)
             this = tg/real(k, Kind(0.d0)) + 2.d0*tv
-            ! Contention only ever adds time, so the least reading is the
-            ! least polluted estimator; a mean carries every burst it saw.
+            ! Use minimum as "best case" scenario
             cost(i) = min(cost(i), this)
          enddo
       enddo
@@ -450,10 +446,11 @@ contains
 
       deallocate (g, xs, ys, v, w)
 
-      ! When the probe curve is ~flat, fall back to the formula. Untimed
-      ! candidates sit at the largest representable number "huge".
+      ! Bounds of the curve; untimed candidates sit at "huge".
       lo = minval(cost, mask=(cost < huge(1.d0)))
       hi = maxval(cost, mask=(cost < huge(1.d0)))
+
+      ! When the curve is flat prefer the formula.
       if (lo <= 0.d0 .or. hi < PROBE_MARGIN*lo) return
 
       ! Take the largest candidate within PROBE_MARGIN of the best; overshooting
@@ -466,13 +463,12 @@ contains
 
 !-------------------------------------------------------------------------------
 !> @brief
-!> Fill probe scratch with entries of modulus ~1 and no dominant diagonal.
+!> Fill probe scratch with finite entries of order one.
 !>
 !> @details
-!> Deliberately not an RNG: the probe is a timing, so it would consume a
-!> different number of draws on each machine and run, and the Markov chain's
-!> generator state must not depend on that. Assumed size, so one routine
-!> serves both the matrices and the vectors.
+!> Touches every page before timing starts and keeps NaNs and denormals, which
+!> can run slower, out of the kernels. A closed form rather than the RNG, so
+!> the probe leaves the Markov chain's random stream untouched.
 !-------------------------------------------------------------------------------
 
    subroutine probe_fill(a, n)
@@ -547,15 +543,12 @@ contains
 
 !-------------------------------------------------------------------------------
 !> @brief
-!> Fail if a factored region is open where the caller cannot cope.
+!> Stop if the factored region is open.
 !>
 !> @details
-!> Wrapgr_PlaceGR and Wrapgr_Random_update read and copy the whole Green's
-!> function (GR_st = Gr, Gr = GR_st for the multi-flip restore), which a
-!> factored one would silently corrupt. Today neither can run inside the region
-!> -- both are reached only outside the sequential vertex loop -- so this
-!> asserts an invariant rather than handling a case. A future caller that breaks
-!> it stops here instead of quietly reading a stale matrix.
+!> For callers that read, copy or wrap GR as a whole (Wrapgr_PlaceGR,
+!> Wrapgr_Random_update): inside the region GR holds only G_stale, so they
+!> would silently corrupt the chain.
 !-------------------------------------------------------------------------------
 
    subroutine delay_assert_inactive(where)
@@ -626,10 +619,6 @@ contains
 !-------------------------------------------------------------------------------
 !> @brief
 !> Flush every flavour into GR and close the region.
-!>
-!> @details
-!> Whatever is still pending has to be paid for: leaving it out would credit the
-!> chain with updates it never applied.
 !-------------------------------------------------------------------------------
 
    subroutine delay_close(GR)
@@ -661,7 +650,7 @@ contains
 
 !-------------------------------------------------------------------------------
 !> @brief
-!> The d x d block of the *current* Green's function on the operator's support.
+!> The d x d block of the current Green's function on the operator's support.
 !>
 !> @details
 !> blk(n,m) = G(P(n), P(m)) = G_stale(P(n),P(m)) + sum_c X(P(n),c)*Y(P(m),c).
