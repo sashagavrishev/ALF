@@ -25,7 +25,7 @@
 !> Two levels, deliberately: the environment variable governs cost and
 !> output, the ALF_INSTRUMENT *macro* governs bitwise identity. Only the
 !> preprocessor can remove the near-tie hoist from the accept/reject line
-!> in upgrade_mod, which a runtime test cannot -- see CONSOLIDATION.md 3.4.
+!> in upgrade_mod, which a runtime test cannot.
 !--------------------------------------------------------------------
 Module Instrument_mod
 
