@@ -99,11 +99,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # gfortran and cmake are preinstalled; a BLAS is not. The same OpenBLAS the
-      # superproject uses. On this suite it measures the same as the netlib
-      # reference -- two netlib readings of the identical job differed by more
-      # than the two libraries did -- so the choice is consistency, not speed.
-      # It is not a wash everywhere: on the superproject's chains it is 3.3x.
+      # gfortran and cmake are preinstalled; a BLAS is not. OpenBLAS measures the
+      # same as the netlib reference on this suite -- two netlib readings of the
+      # identical job differed by more than the two libraries did -- so the
+      # choice is consistency with production builds, not speed here.
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq

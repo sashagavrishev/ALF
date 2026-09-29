@@ -224,8 +224,7 @@ best_march()
 # flag implying -ffinite-math-only lets the compiler assume no operand is NaN,
 # fold that to .false. and delete the guard, with no diagnostic: a run whose
 # Green function diverges then writes plausible-looking bins instead of
-# aborting. ifx -fp-model=fast=2 does exactly this (measured; see
-# scripts/benchmarks/nanguard.f90 in the parent repository), and
+# aborting. ifx -fp-model=fast=2 does exactly this (measured), and
 # Control_Precision_tau has no magnitude threshold to fall back on.
 #
 # Probed rather than hard-coded: the restoring flag differs between compilers
@@ -847,8 +846,8 @@ case $MACHINE in
   #MKL dispatches on CPUID *vendor*, not on features, so on AMD it needs the
   #vendor-check override LD_PRELOADed at *run* time or it takes a conservative
   #kernel and this target is roughly half speed with nothing to say about it.
-  #The override is a runtime artefact, not a link-time one: see scripts/mkl_shim.py
-  #in the parent repository, which builds it and checks it engaged.
+  #The override is a runtime artefact, not a link-time one, and is not provided
+  #here: whatever launches the runs has to build it and check it engaged.
   PKS_ZEN_MKL)
     load_intel_env || return 1
     ALF_FC="$INTELLLVMCOMPILER"
@@ -869,7 +868,7 @@ case $MACHINE in
     F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
     # Threaded MKL deliberately, exactly as measured. Every chain runs on one
     # core, so the thread pool is unused rather than harmful; MKL_NUM_THREADS=1
-    # is exported alongside it (scripts/environments.py) so it stays that way
+    # should be exported in the job environment so it stays that way
     # even if SLURM_CPUS_PER_TASK, which is what pyALF derives OMP_NUM_THREADS
     # from, is ever missing. -qmkl=sequential would drop the pool outright and
     # is worth pricing, but it is not the configuration the benchmark ranked.
@@ -892,8 +891,7 @@ case $MACHINE in
   #fails on `allocate(ham_X::ham)`), and, once the type is moved to a companion
   #module so it does link, a `procedure, nopass ::` override that dispatches to
   #the *base* implementation -- the run dies with "Ham_set not defined!". Kept
-  #for a future LLVM-Flang-based AOCC; scripts/benchmarks/flang_td_probe.sh in
-  #the parent repository reproduces both in seconds.
+  #for a future LLVM-Flang-based AOCC.
   PKS_AOCC)
     module load aocc/5.2.0
     module load aocl/5.3-aocc-ST
