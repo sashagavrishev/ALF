@@ -298,6 +298,8 @@ contains
       integer :: i
       real (Kind=Kind(0.d0)) :: lo          ! best cost, the curve's normaliser
       character (Len=13) :: mark, tag       ! marker for the depth in force
+      logical :: timed    ! the probe produced a usable curve
+      logical :: placed   ! the depth in force has a row in the table
 
       write (unit,'(a)')  ' Delayed update:'
       write (unit,'(2a)') '   ALF_DELAY_K            : ', trim(k_request_text)
@@ -316,9 +318,17 @@ contains
          & K_FLOOR, ', ', K_CEILING, ']'
       endif
 
-      ! Write a note when one had to fall back to the formula on a refused probe
-      if (trim(delay_source) == 'formula' .and. k_request == K_AUTO) &
-      & write (unit,'(a)') '   WARN: the probe was refused; this is the formula'
+      ! Say why auto fell back to the formula: a curve that is flat to within
+      ! PROBE_MARGIN is a result, a probe that gave no reading is not.
+      timed = any(probe_cost > 0.d0 .and. probe_cost < huge(1.d0)) .and. &
+      &       probe_imm_cost > 0.d0 .and. probe_imm_cost < huge(1.d0)
+      if (trim(delay_source) == 'formula' .and. k_request == K_AUTO) then
+         if (timed) then
+            write (unit,'(a)') '   note: the curve is flat; this is the formula'
+         else
+            write (unit,'(a)') '   WARN: the probe was refused; this is the formula'
+         endif
+      endif
 
       ! Still at its -1 default: the probe never ran, so there is no curve.
       if (probe_cost(1) < 0.d0) return
@@ -343,7 +353,13 @@ contains
          write (unit,'(a,i5,a)') '   ', 0, '       --  (immediate, not timed)'
       endif
 
+      ! A formula depth need not be a candidate; it gets its own row, in order.
+      placed = kmax == 0 .or. any(K_CAND == kmax)
       do i = 1, N_CAND
+         if (.not. placed .and. kmax < K_CAND(i)) then
+            write (unit,'(a,i5,2a)') '   ', kmax, '       --  (not timed)', trim(mark)
+            placed = .true.
+         endif
          tag = ''
          if (K_CAND(i) == kmax) tag = mark
          if (K_CAND(i) > ndim_s) then
@@ -355,6 +371,8 @@ contains
             & trim(tag)
          endif
       enddo
+      if (.not. placed) &
+      & write (unit,'(a,i5,2a)') '   ', kmax, '       --  (not timed)', trim(mark)
    end subroutine delay_log
 
 !-------------------------------------------------------------------------------
