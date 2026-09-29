@@ -51,12 +51,14 @@ Program DelayedProbeLog
       Read (u, '(a)', iostat=ios) line
       If (ios /= 0) Exit
       Write (*,'(a)') trim(line)
-      If (index(line, '(immediate') > 0) n_imm = n_imm + 1
+      ! Table rows open with their depth, the immediate one with 0; header
+      ! lines open with a word, and one of them can say "(immediate)" too.
+      Read (line, *, iostat=ios) k_row
+      If (ios /= 0) Cycle
+      If (k_row == 0 .and. index(line, '(immediate') > 0) n_imm = n_imm + 1
       If (index(line, '<- ') > 0) Then
          n_mark = n_mark + 1
-         ! Rows open with the depth, the immediate one with 0.
-         Read (line, *, iostat=ios) k_row
-         If (ios == 0 .and. k_row == k) mark_on_k = .true.
+         If (k_row == k) mark_on_k = .true.
       End If
    End Do
    Close (u)
