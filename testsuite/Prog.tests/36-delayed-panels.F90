@@ -32,16 +32,16 @@ Program DelayedPanels
    Complex (Kind=Kind(0.D0)), Allocatable :: blk(:,:), rows(:,:), cols(:,:)
    Complex (Kind=Kind(0.D0)) :: one, alpha
    Real (Kind=Kind(0.D0)) :: err, scale
-   Integer :: i, j, l, step, d, nfail, P(dmax)
+   Integer :: i, j, l, step, d, nfail, k, P(dmax)
 
    one   = cmplx(1.d0, 0.d0, kind(0.D0))
    nfail = 0
    d     = 2
    P     = [3, 6]
 
-   If (delay_depth(Ndim) /= kdepth) Then
-      Write (*,*) "ERROR: ALF_DELAY_K must be", kdepth, "for this test; got", &
-         &        delay_depth(Ndim)
+   k = delay_resolve(Ndim, dmax)
+   If (k /= kdepth) Then
+      Write (*,*) "ERROR: ALF_DELAY_K must be", kdepth, "for this test; got", k
       Stop 2
    End If
 
@@ -57,7 +57,7 @@ Program DelayedPanels
    g_full  = GR(:,:,1)
    g_start = GR(:,:,1)
 
-   Call delay_alloc(Ndim, N_FL, dmax)
+   Call delay_alloc(Ndim, N_FL, dmax, k)
    Call delay_open()
 
    If (.not. delay_active) Then

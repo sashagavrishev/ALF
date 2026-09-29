@@ -6,16 +6,19 @@
 # reach is Upgrade2's delayed branch, which links those routines to the
 # Woodbury chain: the reconstructed rows feed v, the reconstructed columns feed
 # the rank-d update, and a mistake there produces a plausible chain rather
-# than an obviously wrong one.
+# than an obviously wrong one. Nor can they reach delay_assert_inactive, which
+# guards the global-in-tau moves; the z2matter set is here for that.
 #
 # Here a sampler is run twice on each parameter set, once with the delay off and
 # once with it on, from the same seeds. We require the auxiliary field
 # configuration left behind to be identical. Up to Metropolis near-ties the
-# two schemes accept exactly the same flips, so this is an equality and not a
+# two schemes accept exactly the same updates, so this is an equality and not a
 # tolerance. An HDF5 build writes confout_0.h5 instead of confout_0; two such
 # files holding identical data still differ byte-for-byte (HDF5 tracks
 # per-object timestamps by default), so that variant is compared
-# dataset-by-dataset with h5diff rather than cmp.
+# dataset-by-dataset with h5diff rather than cmp. Without h5diff on the PATH
+# that comparison cannot be made, and the model is reported as skipped rather
+# than failed: a missing tool says nothing about the delayed update.
 #
 # Usage: delayed_vs_immediate.sh <ALF.out> <source dir> <work dir>
 
@@ -31,8 +34,9 @@ if [ ! -x "$exe" ]; then
 fi
 
 status=0
+skipped=0
 
-for model in hubbard tv; do
+for model in hubbard tv z2matter; do
    for arm in immediate delayed; do
       dir="$work/$model.$arm"
       rm -rf "$dir"
@@ -79,9 +83,31 @@ for model in hubbard tv; do
       continue
    fi
 
+   # Likewise for a set that enables global-in-tau moves to reach
+   # delay_assert_inactive: the Hamiltonian may override the sampling window, so
+   # require that the run both kept a sequential range, where the delay opens,
+   # and did global moves after it, where the assertion sits.
+   if grep -iq '^ *Global_tau_moves *= *\.T\.' "$src/parameters_$model"; then
+      info="$work/$model.delayed/info"
+      seq_start=$(awk '/Nt_sequential_start:/{print $(NF)}' "$info")
+      seq_end=$(awk '/Nt_sequential_end  :/{print $(NF)}' "$info")
+      n_global=$(awk '/N_Global_tau       :/{print $(NF)}' "$info")
+      if [ "${n_global:-0}" -le 0 ] || [ "${seq_end:-0}" -lt "${seq_start:-1}" ]; then
+         echo "FAIL: $model: expected sequential and global-in-tau moves, info reports" \
+              "Nt_sequential ${seq_start:-?}..${seq_end:-?}, N_Global_tau ${n_global:-<none>}"
+         status=1
+         continue
+      fi
+   fi
+
    diff_log=""
    case "$imm" in
       *.h5)
+         if ! command -v h5diff > /dev/null 2>&1; then
+            echo "SKIP: $model: h5diff not found, cannot compare HDF5 configurations"
+            skipped=1
+            continue
+         fi
          diff_log="$work/$model.h5diff.log"
          if h5diff "$imm" "$del" > "$diff_log" 2>&1; then identical=0; else identical=1; fi
          ;;
@@ -99,4 +125,8 @@ for model in hubbard tv; do
    fi
 done
 
+# A failure anywhere outranks a skip; a skip alone is reported as one (77).
+if [ "$status" -eq 0 ] && [ "$skipped" -ne 0 ]; then
+   exit 77
+fi
 exit $status

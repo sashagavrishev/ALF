@@ -45,7 +45,7 @@ Program DelayedUpdate
    Complex (Kind=Kind(0.D0)), Allocatable :: blk(:,:), rows(:,:), cols(:,:)
    Complex (Kind=Kind(0.D0)) :: one, alpha
    Real    (Kind=Kind(0.D0)) :: err, scale, moved, before
-   Integer :: i, j, l, n, step, d, nfail, idiag, iud, nt_f, N_Type
+   Integer :: i, j, l, n, step, d, nfail, idiag, iud, nt_f, N_Type, k
    Integer :: P(dmax)
    Character (Len=1) :: updo
    Type (Operator) :: Op
@@ -54,9 +54,9 @@ Program DelayedUpdate
    one   = cmplx(1.d0, 0.d0, kind(0.D0))
    nfail = 0
 
-   If (delay_depth(Ndim) /= kdepth) Then
-      Write (*,*) "ERROR: ALF_DELAY_K must be", kdepth, "for this test; got", &
-         &        delay_depth(Ndim)
+   k = delay_resolve(Ndim, dmax)
+   If (k /= kdepth) Then
+      Write (*,*) "ERROR: ALF_DELAY_K must be", kdepth, "for this test; got", k
       Stop 2
    End If
 
@@ -131,7 +131,7 @@ Program DelayedUpdate
       End Do
       g_imm = GR(:,:,1)
 
-      Call delay_alloc(Ndim, N_FL, dmax)
+      Call delay_alloc(Ndim, N_FL, dmax, k)
       Call delay_open()
 
       If (.not. delay_active) Then

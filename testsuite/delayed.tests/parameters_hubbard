@@ -1,5 +1,5 @@
 ! Rank-1 vertices: Upgrade2's delayed branch takes its op_dim_nf == 1 arm, the
-! one a production Hubbard run takes on every accepted flip.
+! one a production Hubbard run takes on every accepted update.
 !
 ! Deliberately tiny. The property under test -- that the delayed update walks
 ! the same Markov chain as the immediate one -- fails on the first slice it is
