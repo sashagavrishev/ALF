@@ -11,7 +11,8 @@ from argparse import ArgumentParser
 from pprint import pprint
 import os
 
-from parse_ham_mod import parse, create_read_write_par, get_ham_names_ham_files
+from parse_ham_mod import (parse, create_read_write_par, get_ham_names_ham_files,
+                           base_public_names, check_base_shadowing)
 
 
 if __name__ == '__main__':
@@ -89,8 +90,10 @@ if __name__ == '__main__':
             f.write(hamiltonians_case_str)
 
     if args.create_read_write_par:
+        base_names = base_public_names('Hamiltonian_main_mod.F90')
         for ham_name, ham_file in zip(ham_names, ham_files):
             parameters = parse(ham_file)
+            check_base_shadowing(ham_file, parameters, base_names)
             # pprint(parameters)
             filename = os.path.join(
                 os.path.dirname(ham_file),

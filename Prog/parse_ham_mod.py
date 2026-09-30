@@ -75,6 +75,59 @@ def parse(filename):
     return parameters
 
 
+def base_public_names(filename):
+    """Return the lower-cased names Hamiltonian_main makes public.
+
+    Collects both declarations with a `public` attribute and `public ::`
+    statements, so procedures are included too.
+    """
+    names = set()
+    with open(filename, 'r', encoding='UTF-8') as f:
+        for line in f:
+            code = line.split('!', maxsplit=1)[0]
+            if '::' not in code:
+                continue
+            attrs, rest = code.split('::', maxsplit=1)
+            if 'public' not in attrs.lower():
+                continue
+            for entity in rest.split(','):
+                name = entity.split('=')[0].split('(')[0].strip().lower()
+                if name.isidentifier():
+                    names.add(name)
+    return names
+
+
+def check_base_shadowing(filename, parameters, base_names):
+    """Fail if a parameter redeclares a public variable of Hamiltonian_main.
+
+    Such a parameter must be commented out (`!logical :: Symm = ...`).
+    Declared, it compiles silently into a second variable local to the
+    submodule: the namelist reads into that copy while ALF's core keeps
+    using the base one.
+    """
+    for name_key, namelist in parameters.items():
+        for par_name, par in namelist.items():
+            if not par['defined_in_base'] and par_name.lower() in base_names:
+                raise Exception(
+                    '{}, namelist {}: parameter "{}" is declared in '
+                    'Hamiltonian_main, so it must be commented out '
+                    '("!{} :: ..."); declaring it here creates a separate '
+                    'local variable that ALF never reads.'.format(
+                        filename, name_key, par_name,
+                        _dtype_hint(par['value']))
+                    )
+
+
+def _dtype_hint(value):
+    if isinstance(value, bool):
+        return 'logical'
+    if isinstance(value, float):
+        return 'real(kind=kind(0.d0))'
+    if isinstance(value, int):
+        return 'integer'
+    return 'character(len=64)'
+
+
 def parse_line(line):
     """Parse single line in Fortran file for parameter."""
     parameter = {}
