@@ -38,3 +38,6 @@ Prog/.parse_parameters
 # has to live here: an enclosing repository's .gitignore does not reach inside
 # a submodule's own work tree.
 .alf-build-config
+
+# Marker the MKL dispatch shim writes in the working directory of each process it binds.
+.mklshim.called
