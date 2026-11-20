@@ -75,7 +75,7 @@ Subroutine Check_udv(Tmp, UDV, Diff)
 
   Integer :: I, I1, M
   Real (Kind = Kind(0.d0)) :: X
-  Complex (Kind = Kind(0.d0)) :: Z 
+  Complex (Kind = Kind(0.d0)) :: Z, S
   
   If (udv%side == "r" .or. udv%side == "R" ) Then
      Diff = 0.d0
@@ -83,7 +83,8 @@ Subroutine Check_udv(Tmp, UDV, Diff)
         Do I1 = 1,  size(udv%V,2)
            Z = cmplx(0.d0,0.d0,Kind = Kind(0.d0))
            Do M = 1, size(udv%U,2)
-              Z =  Z  +    udv%U(I,M)*udv%D(M) * udv%V(M,I1)
+              call udv%getscale(S, M)
+              Z =  Z  +    udv%U(I,M)*S * udv%V(M,I1)
            Enddo
            Z = Z - TMP(I,I1)
            X = abs(Z)
@@ -97,7 +98,8 @@ Subroutine Check_udv(Tmp, UDV, Diff)
         Do I1 = 1,  size(udv%V,2)
            Z = cmplx(0.d0,0.d0,Kind = Kind(0.d0))
            Do M = 1, size(udv%U,2)
-              Z =  Z  +    udv%U(I,M)*udv%D(M) * conjg(udv%V(I1,M))
+              call udv%getscale(S, M)
+              Z =  Z  +    udv%U(I,M)*S * conjg(udv%V(I1,M))
            Enddo
            Z = Z - TMP(I,I1)
            X = abs(Z)
