@@ -85,11 +85,23 @@ Module Operator_mod
      !              and dimensions E_exp(N,-2:2)   for Type = 2
      !
      ! !!! If Type .neq. 1,2  then  E_exp  and  M_exp  are  not allocated !!!
+
+     ! Low-rank path (Op_set decides; see op_lowrank_wanted): the mmults apply
+     ! e^{g phi O} = 1 + V (e^{g phi E} - 1) V^dag with V = U(:,1:N_non_zero), and the
+     ! wraps rotate by the product Q of N_non_zero Householder reflectors (QR of V)
+     ! instead of U. Q's first N_non_zero columns are U's up to a phase, which the
+     ! update in the rotated basis does not see; only the null-space basis differs.
+     logical          :: lowrank = .false.
+     complex (Kind=Kind(0.d0)), allocatable :: HY(:,:), HT(:,:)  !> Q = I - HY HT HY^dag (compact WY)
+     Integer          :: P0 = 0                               !> P(1) if P is a contiguous ascending run, else 0
    contains
-     procedure  :: get_g_t_alloc => operator_get_g_t_alloc     !>    External access to   private  logical  variable g_t_alloc 
+     procedure  :: get_g_t_alloc => operator_get_g_t_alloc     !>    External access to   private  logical  variable g_t_alloc
   end type Operator
 
-  
+  !> -1: read ALF_LOWRANK_VERTEX at the first Op_set (unset or nonzero: on); 0 off; 1 on.
+  Integer :: Op_lowrank_mode = -1
+
+
 Contains
 
 !!$  Real (Kind=Kind(0.d0)) :: Phi(-2:2,2),  Gaml(-2:2,2)
@@ -209,6 +221,7 @@ Contains
     Op%U_alloc = .false.
     Op%M_exp_alloc = .false.
     Op%g_t_alloc = .false.
+    Op%lowrank = .false.
   end subroutine Op_make
 
 !--------------------------------------------------------------------
@@ -244,6 +257,8 @@ Contains
       If ( Op%U_alloc )   deallocate(OP%U, OP%O, OP%P, OP%E)
       if ( Op%g_t_alloc )  deallocate(Op%g_t)
     endif
+    if (allocated(Op%HY)) deallocate(Op%HY, Op%HT)
+    Op%lowrank = .false.
 
   end subroutine Op_clear
 
@@ -401,6 +416,10 @@ Contains
 #ifdef MPI
     if (use_mpi_shm) call MPI_WIN_FENCE(0, Op%win_U, ierr)
 #endif
+    if (allocated(Op%HY)) deallocate(Op%HY, Op%HT)
+    Op%lowrank = op_lowrank_wanted(Op)
+    if (Op%lowrank) call op_lowrank_setup(Op)
+
     select case(OP%type)
     case(1)
        if (use_mpi_shm) then
@@ -408,7 +427,12 @@ Contains
           arrayshape=(/ Op%N,Op%N,3 /)
           call allocate_shared_memory(Op%M_exp,Op%win_M_exp,noderank,arrayshape)
        else
-          Allocate(Op%E_exp(Op%N, -Op%type : Op%type), Op%M_exp(Op%N, Op%N, 3))
+          ! The low-rank path never reads M_exp, which would cost Op%N**2 * 3 per operator.
+          if (Op%lowrank) then
+             Allocate(Op%E_exp(Op%N, -Op%type : Op%type), Op%M_exp(0, 0, 3))
+          else
+             Allocate(Op%E_exp(Op%N, -Op%type : Op%type), Op%M_exp(Op%N, Op%N, 3))
+          endif
        endif
        Op%M_exp_alloc = .true.
        nsigma_single%t(1) = 1
@@ -425,7 +449,7 @@ Contains
           enddo
           !call Op_exp(Op%g*Phi_st( I,1),Op,Op%M_exp(:,:,I))
           !call Op_exp(Op%g*Phi_st(-I,1),Op,Op%M_exp(:,:,-I))
-          if (noderank == 0) then
+          if (noderank == 0 .and. size(Op%M_exp, 1) > 0) then
              call Op_exp( Op%g*nsigma_single%Phi(1,1),Op,Op%M_exp(:,:, I+2))
              call Op_exp(-Op%g*nsigma_single%Phi(1,1),Op,Op%M_exp(:,:,-I+2))
           endif
@@ -439,7 +463,12 @@ Contains
           arrayshape=(/ Op%N,Op%N,5 /)
           call allocate_shared_memory(Op%M_exp,Op%win_M_exp,noderank,arrayshape)
        else
-          Allocate(Op%E_exp(Op%N, -Op%type : Op%type), Op%M_exp(Op%N, Op%N, 5))
+          ! The low-rank path never reads M_exp, which would cost Op%N**2 * 5 per operator.
+          if (Op%lowrank) then
+             Allocate(Op%E_exp(Op%N, -Op%type : Op%type), Op%M_exp(0, 0, 5))
+          else
+             Allocate(Op%E_exp(Op%N, -Op%type : Op%type), Op%M_exp(Op%N, Op%N, 5))
+          endif
        endif
        Op%M_exp_alloc = .true.
        nsigma_single%t(1) = 2
@@ -454,7 +483,7 @@ Contains
                 Op%E_exp(n,-I) = 1.D0/Op%E_exp(n,I)
              endif
           enddo
-          if (noderank == 0) then
+          if (noderank == 0 .and. size(Op%M_exp, 1) > 0) then
              call Op_exp( Op%g*nsigma_single%Phi(1,1),Op,Op%M_exp(:,: ,I+3))
              call Op_exp(-Op%g*nsigma_single%Phi(1,1),Op,Op%M_exp(:,:,-I+3))
           endif
@@ -574,6 +603,10 @@ Contains
     g_loc = OP%g
     if (op%g_t_alloc)  g_loc = Op%g_t(nt)
     if ( abs(g_loc) < Eps_machine ) return
+    if ( Op%lowrank ) then
+       call op_lowrank_mmult(Mat, N1, N2, Op, HS_Field, cop, nt, sign, 'R')
+       return
+    endif
 
     if ( op%type < 3 ) then
        sp = sign*nint(Real(HS_Field))
@@ -666,6 +699,10 @@ Contains
     g_loc = Op%g
     if (op%g_t_alloc) g_loc = Op%g_t(nt)
     if ( abs(g_loc) < Eps_machine ) return
+    if ( Op%lowrank ) then
+       call op_lowrank_mmult(Mat, N1, N2, Op, HS_Field, cop, nt, 1, 'L')
+       return
+    endif
 
     if ( op%type < 3 ) then
        sp = nint(Real(Hs_Field))
@@ -753,6 +790,10 @@ Contains
     Complex (kind=kind(0.d0)) :: g_loc
     Complex (Kind=Kind(0.d0)) :: phi_loc
 
+    if ( Op%lowrank ) then
+       call op_lowrank_wrap(Mat, Ndim, Op, HS_Field, N_Type, nt, .true.)
+       return
+    endif
     phi_loc = Phi_of_field(HS_Field, op%type)
 
     if ( op%type < 3 ) then
@@ -868,6 +909,10 @@ Contains
     Complex (Kind = Kind(0.D0)) :: g_loc
     Complex (Kind=Kind(0.d0)) :: phi_loc
 
+    if ( Op%lowrank ) then
+       call op_lowrank_wrap(Mat, Ndim, Op, HS_Field, N_Type, nt, .false.)
+       return
+    endif
     phi_loc = Phi_of_field(HS_Field, op%type)
 
     if ( op%type < 3 ) then
@@ -1005,6 +1050,10 @@ Contains
        return
     endif
 
+    if ( Op%lowrank ) then
+       call op_lowrank_panels(Xpan, Ypan, Ndim, ncols, Op, HS_Field, N_Type, nt, up)
+       return
+    endif
     phi_loc = Phi_of_field(HS_Field, op%type)
 
     g_loc = Op%g
@@ -1116,6 +1165,383 @@ Contains
     endif
 
   end Subroutine Op_Wrap_panels
+
+!--------------------------------------------------------------------
+!> @brief
+!> Whether Op_set gives the operator the low-rank path: a non-diagonal HS vertex
+!> (type >= 1) of rank under half its width, where it is cheaper than the dense
+!> Op%N x Op%N products. ALF_LOWRANK_VERTEX=0 turns it off.
+!--------------------------------------------------------------------
+  logical function op_lowrank_wanted(Op)
+    Implicit none
+    Type (Operator), intent(in) :: Op
+    Character (len=16) :: text
+    Integer :: length, status, value, ios
+
+    if (Op_lowrank_mode < 0) then
+       Op_lowrank_mode = 1
+       call get_environment_variable("ALF_LOWRANK_VERTEX", text, length, status)
+       if (status == 0 .and. length > 0) then
+          read(text(1:length), *, iostat=ios) value
+          if (ios == 0 .and. value == 0) Op_lowrank_mode = 0
+       endif
+    endif
+    op_lowrank_wanted = Op_lowrank_mode == 1 .and. Op%type >= 1 .and. .not. Op%diag &
+         &              .and. Op%N > 1 .and. Op%N_non_zero >= 1 .and. 2*Op%N_non_zero < Op%N
+  end function op_lowrank_wanted
+
+!> Householder QR of V = Op%U(:,1:N_non_zero) in compact WY form, Q = I - HY HT HY^dag,
+!> and the start of P when it is a contiguous ascending run (0 otherwise).
+  subroutine op_lowrank_setup(Op)
+    Implicit none
+    Type (Operator), intent(inout) :: Op
+    Complex (Kind=Kind(0.d0)), allocatable :: work(:), tau(:)
+    Complex (Kind=Kind(0.d0)) :: wq(1)
+    Integer :: n, nz, info, i
+
+    n  = Op%N
+    nz = Op%N_non_zero
+    allocate(Op%HY(n, nz), Op%HT(nz, nz), tau(nz))
+    Op%HY = Op%U(:, 1:nz)
+    call ZGEQRF(n, nz, Op%HY, n, tau, wq, -1, info)
+    allocate(work(max(1, nint(real(wq(1))))))
+    call ZGEQRF(n, nz, Op%HY, n, tau, work, size(work), info)
+    if (info /= 0) then
+       Write(error_unit, '(A,I0)') ' op_lowrank_setup: ZGEQRF failed, info = ', info
+       Call Terminate_on_error(ERROR_GENERIC, __FILE__, __LINE__)
+    endif
+    Op%HT = cmplx(0.d0, 0.d0, kind(0.d0))
+    call ZLARFT('F', 'C', n, nz, Op%HY, n, tau, Op%HT, nz)
+    ! ZLARFT reads only the reflectors below the diagonal; make HY the explicit
+    ! unit lower trapezoidal Y, as the products below use it whole.
+    do i = 1, nz
+       Op%HY(1:i-1, i) = cmplx(0.d0, 0.d0, kind(0.d0))
+       Op%HY(i, i)     = cmplx(1.d0, 0.d0, kind(0.d0))
+    enddo
+    Op%P0 = Op%P(1)
+    do i = 2, n
+       if (Op%P(i) /= Op%P(1) + i - 1) Op%P0 = 0
+    enddo
+  end subroutine op_lowrank_setup
+
+!> d(n) = e^{sgn g phi E(n)}, n <= N_non_zero, read as the dense path reads it.
+  subroutine op_lowrank_factors(Op, HS_Field, nt, sgn, d)
+    Implicit none
+    Type (Operator), intent(in) :: Op
+    Complex (Kind=Kind(0.d0)), intent(in) :: HS_Field
+    Integer, intent(in) :: nt, sgn
+    Complex (Kind=Kind(0.d0)), intent(out) :: d(:)
+    Complex (Kind=Kind(0.d0)) :: g_loc, phi_loc
+    Integer :: n, sp
+
+    if (Op%type < 3 .and. .not. Op%g_t_alloc) then
+       sp = sgn*nint(real(HS_Field))
+       do n = 1, Op%N_non_zero
+          d(n) = Op%E_exp(n, sp)
+       enddo
+    else
+       phi_loc = Phi_of_field(HS_Field, Op%type)
+       g_loc = Op%g
+       if (Op%g_t_alloc) g_loc = Op%g_t(nt)
+       do n = 1, Op%N_non_zero
+          d(n) = exp(sgn*phi_loc*g_loc*Op%E(n))
+       enddo
+    endif
+  end subroutine op_lowrank_factors
+
+!--------------------------------------------------------------------
+!> @brief
+!> op(Q) = I + B S B^dag for which = 'N' (Q), 'C' (Q^dag), 'T' (Q^T), 'J' (conjg(Q)):
+!> B = HY or conjg(HY), S = -HT, -HT^dag, -HT^T or -conjg(HT).
+!--------------------------------------------------------------------
+  subroutine op_lowrank_qform(Op, which, B, S)
+    Implicit none
+    Type (Operator), intent(in) :: Op
+    Character, intent(in) :: which
+    Complex (Kind=Kind(0.d0)), intent(out) :: B(:,:), S(:,:)
+
+    select case (which)
+    case ('N')
+       B = Op%HY
+       S = -Op%HT
+    case ('C')
+       B = Op%HY
+       S = -conjg(transpose(Op%HT))
+    case ('T')
+       B = conjg(Op%HY)
+       S = -transpose(Op%HT)
+    case ('J')
+       B = conjg(Op%HY)
+       S = -conjg(Op%HT)
+    end select
+  end subroutine op_lowrank_qform
+
+!--------------------------------------------------------------------
+!> @brief
+!> Rows P of Mat(M1,M2): X <- X + B S (B^dag X), X = Mat(P,:), B (N x nz), S (nz x nz).
+!> In place when P is a contiguous run; otherwise X is gathered and scattered.
+!--------------------------------------------------------------------
+  subroutine op_lowrank_rows(Op, Mat, M1, M2, B, S)
+    Implicit none
+    Type (Operator), intent(in) :: Op
+    Integer, intent(in) :: M1, M2
+    Complex (Kind=Kind(0.d0)), intent(inout) :: Mat(M1, M2)
+    Complex (Kind=Kind(0.d0)), intent(in) :: B(:,:), S(:,:)
+    Complex (Kind=Kind(0.d0)), allocatable :: X(:,:)
+    Integer :: i
+
+    if (Op%P0 > 0) then
+       call op_lowrank_rows_kernel(Op%N, M2, Op%N_non_zero, B, S, Mat(Op%P0, 1), M1)
+    else
+       allocate(X(Op%N, M2))
+       do i = 1, Op%N
+          X(i, :) = Mat(Op%P(i), :)
+       enddo
+       call op_lowrank_rows_kernel(Op%N, M2, Op%N_non_zero, B, S, X, Op%N)
+       do i = 1, Op%N
+          Mat(Op%P(i), :) = X(i, :)
+       enddo
+    endif
+  end subroutine op_lowrank_rows
+
+!> Columns P of Mat(M1,M2): X <- X + (X B) S B^dag, X = Mat(:,P); in place as above.
+  subroutine op_lowrank_cols(Op, Mat, M1, M2, B, S)
+    Implicit none
+    Type (Operator), intent(in) :: Op
+    Integer, intent(in) :: M1, M2
+    Complex (Kind=Kind(0.d0)), intent(inout) :: Mat(M1, M2)
+    Complex (Kind=Kind(0.d0)), intent(in) :: B(:,:), S(:,:)
+    Complex (Kind=Kind(0.d0)), allocatable :: X(:,:)
+    Integer :: i
+
+    if (Op%P0 > 0) then
+       call op_lowrank_cols_kernel(M1, Op%N, Op%N_non_zero, B, S, Mat(1, Op%P0), M1)
+    else
+       allocate(X(M1, Op%N))
+       do i = 1, Op%N
+          X(:, i) = Mat(:, Op%P(i))
+       enddo
+       call op_lowrank_cols_kernel(M1, Op%N, Op%N_non_zero, B, S, X, M1)
+       do i = 1, Op%N
+          Mat(:, Op%P(i)) = X(:, i)
+       enddo
+    endif
+  end subroutine op_lowrank_cols
+
+!> X(1:n,j) += B S B^dag X(1:n,j) for each column j <= m2 of X(ldx,*). Loops, not
+!> ZGEMM: with nz of one or two the products are thin, and a BLAS call's overhead
+!> outweighs its arithmetic; columns are unit stride.
+  subroutine op_lowrank_rows_kernel(n, m2, nz, B, S, X, ldx)
+    Implicit none
+    Integer, intent(in) :: n, m2, nz, ldx
+    Complex (Kind=Kind(0.d0)), intent(in) :: B(n, nz), S(nz, nz)
+    Complex (Kind=Kind(0.d0)), intent(inout) :: X(ldx, *)
+    Complex (Kind=Kind(0.d0)) :: w(nz), w2(nz), z
+    Integer :: i, j, k
+
+    do j = 1, m2
+       do k = 1, nz
+          z = cmplx(0.d0, 0.d0, kind(0.d0))
+          do i = 1, n
+             z = z + conjg(B(i, k))*X(i, j)
+          enddo
+          w(k) = z
+       enddo
+       do k = 1, nz
+          w2(k) = sum(S(k, :)*w)
+       enddo
+       do k = 1, nz
+          z = w2(k)
+          do i = 1, n
+             X(i, j) = X(i, j) + B(i, k)*z
+          enddo
+       enddo
+    enddo
+  end subroutine op_lowrank_rows_kernel
+
+!> X(1:m1,1:n) += X B S B^dag on X(ldx,*), as op_lowrank_rows_kernel but from the right.
+  subroutine op_lowrank_cols_kernel(m1, n, nz, B, S, X, ldx)
+    Implicit none
+    Integer, intent(in) :: m1, n, nz, ldx
+    Complex (Kind=Kind(0.d0)), intent(in) :: B(n, nz), S(nz, nz)
+    Complex (Kind=Kind(0.d0)), intent(inout) :: X(ldx, *)
+    Complex (Kind=Kind(0.d0)) :: W(m1, nz), W2(m1, nz), z
+    Integer :: j, k, l
+
+    W = cmplx(0.d0, 0.d0, kind(0.d0))
+    do j = 1, n
+       do k = 1, nz
+          z = B(j, k)
+          W(:, k) = W(:, k) + z*X(1:m1, j)
+       enddo
+    enddo
+    W2 = cmplx(0.d0, 0.d0, kind(0.d0))
+    do k = 1, nz
+       do l = 1, nz
+          W2(:, k) = W2(:, k) + W(:, l)*S(l, k)
+       enddo
+    enddo
+    do j = 1, n
+       do k = 1, nz
+          z = conjg(B(j, k))
+          X(1:m1, j) = X(1:m1, j) + z*W2(:, k)
+       enddo
+    enddo
+  end subroutine op_lowrank_cols_kernel
+
+!> Scales rows (rows = .true.) or columns P(1:N_non_zero) of Mat(M1,M2) by d.
+  subroutine op_lowrank_scale(Op, Mat, M1, M2, d, rows)
+    Implicit none
+    Type (Operator), intent(in) :: Op
+    Integer, intent(in) :: M1, M2
+    Complex (Kind=Kind(0.d0)), intent(inout) :: Mat(M1, M2)
+    Complex (Kind=Kind(0.d0)), intent(in) :: d(:)
+    Logical, intent(in) :: rows
+    Integer :: i
+
+    do i = 1, Op%N_non_zero
+       if (rows) then
+          call ZSCAL(M2, d(i), Mat(Op%P(i), 1), M1)
+       else
+          call ZSCAL(M1, d(i), Mat(1, Op%P(i)), 1)
+       endif
+    enddo
+  end subroutine op_lowrank_scale
+
+!--------------------------------------------------------------------
+!> @brief
+!> Mat(P,:) = op(M) Mat(P,:) (side 'L') or Mat(:,P) = Mat(:,P) op(M) (side 'R'), with
+!> M = e^{sgn g phi O} = 1 + V diag(c) V^dag, c = e^{sgn g phi E} - 1: O(Op%N N_non_zero)
+!> per row or column instead of O(Op%N**2). op(M) - 1 = A diag(c) A^dag with A = V
+!> (cop N, C; c conjugated for C) or conjg(V) (cop T).
+!--------------------------------------------------------------------
+  subroutine op_lowrank_mmult(Mat, M1, M2, Op, HS_Field, cop, nt, sgn, side)
+    Implicit none
+    Integer, intent(in) :: M1, M2
+    Complex (Kind=Kind(0.d0)), intent(inout) :: Mat(M1, M2)
+    Type (Operator), intent(in) :: Op
+    Complex (Kind=Kind(0.d0)), intent(in) :: HS_Field
+    Character, intent(in) :: cop, side
+    Integer, intent(in) :: nt, sgn
+    Complex (Kind=Kind(0.d0)) :: A(Op%N, Op%N_non_zero), S(Op%N_non_zero, Op%N_non_zero)
+    Complex (Kind=Kind(0.d0)) :: c(Op%N_non_zero)
+    Integer :: i
+
+    call op_lowrank_factors(Op, HS_Field, nt, sgn, c)
+    c = c - cmplx(1.d0, 0.d0, kind(0.d0))
+    if (cop == 'C' .or. cop == 'c') c = conjg(c)
+    A = Op%U(:, 1:Op%N_non_zero)
+    if (cop == 'T' .or. cop == 't') A = conjg(A)
+    S = cmplx(0.d0, 0.d0, kind(0.d0))
+    do i = 1, Op%N_non_zero
+       S(i, i) = c(i)
+    enddo
+    if (side == 'L') then
+       call op_lowrank_rows(Op, Mat, M1, M2, A, S)
+    else
+       call op_lowrank_cols(Op, Mat, M1, M2, A, S)
+    endif
+  end subroutine op_lowrank_mmult
+
+!--------------------------------------------------------------------
+!> @brief
+!> Op_Wrapup (up) / Op_Wrapdo with Q in place of U, D = diag(e^{g phi E}):
+!>   up,   N_type 1: D Q^dag G Q D^-1        up,   N_type 2: Q G Q^dag
+!>   down, N_type 1: Q D^-1 G D Q^dag        down, N_type 2: Q^dag G Q
+!--------------------------------------------------------------------
+  subroutine op_lowrank_wrap(Mat, Ndim, Op, HS_Field, N_Type, nt, up)
+    Implicit none
+    Integer, intent(in) :: Ndim
+    Complex (Kind=Kind(0.d0)), intent(inout) :: Mat(Ndim, Ndim)
+    Type (Operator), intent(in) :: Op
+    Complex (Kind=Kind(0.d0)), intent(in) :: HS_Field
+    Integer, intent(in) :: N_Type, nt
+    Logical, intent(in) :: up
+    Complex (Kind=Kind(0.d0)) :: dp(Op%N_non_zero), dm(Op%N_non_zero)
+    Complex (Kind=Kind(0.d0)) :: B(Op%N, Op%N_non_zero), S(Op%N_non_zero, Op%N_non_zero)
+
+    if (N_Type == 1) then
+       call op_lowrank_factors(Op, HS_Field, nt,  1, dp)
+       call op_lowrank_factors(Op, HS_Field, nt, -1, dm)
+       if (up) then
+          call op_lowrank_qform(Op, 'C', B, S)
+          call op_lowrank_rows(Op, Mat, Ndim, Ndim, B, S)
+          call op_lowrank_scale(Op, Mat, Ndim, Ndim, dp, .true.)
+          call op_lowrank_qform(Op, 'N', B, S)
+          call op_lowrank_cols(Op, Mat, Ndim, Ndim, B, S)
+          call op_lowrank_scale(Op, Mat, Ndim, Ndim, dm, .false.)
+       else
+          call op_lowrank_scale(Op, Mat, Ndim, Ndim, dm, .true.)
+          call op_lowrank_qform(Op, 'N', B, S)
+          call op_lowrank_rows(Op, Mat, Ndim, Ndim, B, S)
+          call op_lowrank_scale(Op, Mat, Ndim, Ndim, dp, .false.)
+          call op_lowrank_qform(Op, 'C', B, S)
+          call op_lowrank_cols(Op, Mat, Ndim, Ndim, B, S)
+       endif
+    elseif (N_Type == 2) then
+       if (up) then
+          call op_lowrank_qform(Op, 'N', B, S)
+          call op_lowrank_rows(Op, Mat, Ndim, Ndim, B, S)
+          call op_lowrank_qform(Op, 'C', B, S)
+          call op_lowrank_cols(Op, Mat, Ndim, Ndim, B, S)
+       else
+          call op_lowrank_qform(Op, 'C', B, S)
+          call op_lowrank_rows(Op, Mat, Ndim, Ndim, B, S)
+          call op_lowrank_qform(Op, 'N', B, S)
+          call op_lowrank_cols(Op, Mat, Ndim, Ndim, B, S)
+       endif
+    endif
+  end subroutine op_lowrank_wrap
+
+!--------------------------------------------------------------------
+!> @brief
+!> Op_Wrap_panels for op_lowrank_wrap's G -> L G R: X -> L X as G's rows, Y -> R^T Y:
+!>   up,   N_type 1: R^T = D^-1 Q^T          up,   N_type 2: R^T = conjg(Q)
+!>   down, N_type 1: R^T = conjg(Q) D        down, N_type 2: R^T = Q^T
+!--------------------------------------------------------------------
+  subroutine op_lowrank_panels(Xpan, Ypan, Ndim, ncols, Op, HS_Field, N_Type, nt, up)
+    Implicit none
+    Integer, intent(in) :: Ndim, ncols
+    Complex (Kind=Kind(0.d0)), intent(inout) :: Xpan(Ndim, ncols), Ypan(Ndim, ncols)
+    Type (Operator), intent(in) :: Op
+    Complex (Kind=Kind(0.d0)), intent(in) :: HS_Field
+    Integer, intent(in) :: N_Type, nt
+    Logical, intent(in) :: up
+    Complex (Kind=Kind(0.d0)) :: dp(Op%N_non_zero), dm(Op%N_non_zero)
+    Complex (Kind=Kind(0.d0)) :: B(Op%N, Op%N_non_zero), S(Op%N_non_zero, Op%N_non_zero)
+
+    if (N_Type == 1) then
+       call op_lowrank_factors(Op, HS_Field, nt,  1, dp)
+       call op_lowrank_factors(Op, HS_Field, nt, -1, dm)
+       if (up) then
+          call op_lowrank_qform(Op, 'C', B, S)
+          call op_lowrank_rows(Op, Xpan, Ndim, ncols, B, S)
+          call op_lowrank_scale(Op, Xpan, Ndim, ncols, dp, .true.)
+          call op_lowrank_qform(Op, 'T', B, S)
+          call op_lowrank_rows(Op, Ypan, Ndim, ncols, B, S)
+          call op_lowrank_scale(Op, Ypan, Ndim, ncols, dm, .true.)
+       else
+          call op_lowrank_scale(Op, Xpan, Ndim, ncols, dm, .true.)
+          call op_lowrank_qform(Op, 'N', B, S)
+          call op_lowrank_rows(Op, Xpan, Ndim, ncols, B, S)
+          call op_lowrank_scale(Op, Ypan, Ndim, ncols, dp, .true.)
+          call op_lowrank_qform(Op, 'J', B, S)
+          call op_lowrank_rows(Op, Ypan, Ndim, ncols, B, S)
+       endif
+    elseif (N_Type == 2) then
+       if (up) then
+          call op_lowrank_qform(Op, 'N', B, S)
+          call op_lowrank_rows(Op, Xpan, Ndim, ncols, B, S)
+          call op_lowrank_qform(Op, 'J', B, S)
+          call op_lowrank_rows(Op, Ypan, Ndim, ncols, B, S)
+       else
+          call op_lowrank_qform(Op, 'C', B, S)
+          call op_lowrank_rows(Op, Xpan, Ndim, ncols, B, S)
+          call op_lowrank_qform(Op, 'T', B, S)
+          call op_lowrank_rows(Op, Ypan, Ndim, ncols, B, S)
+       endif
+    endif
+  end subroutine op_lowrank_panels
 
 !--------------------------------------------------------------------
 !> @brief
