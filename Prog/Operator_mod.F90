@@ -91,6 +91,8 @@ Module Operator_mod
      ! wraps rotate by the product Q of N_non_zero Householder reflectors (QR of V)
      ! instead of U. Q's first N_non_zero columns are U's up to a phase, which the
      ! update in the rotated basis does not see; only the null-space basis differs.
+     ! Outside MPI shared memory U then holds only V (Op%N x N_non_zero); O stays whole,
+     ! as Op_V_is_symmetric and Op_is_real read it after Op_set.
      logical          :: lowrank = .false.
      complex (Kind=Kind(0.d0)), allocatable :: HY(:,:), HT(:,:)  !> Q = I - HY HT HY^dag (compact WY)
      Integer          :: P0 = 0                               !> P(1) if P is a contiguous ascending run, else 0
@@ -1170,32 +1172,60 @@ Contains
 !> @brief
 !> Whether Op_set gives the operator the low-rank path: a non-diagonal HS vertex
 !> (type >= 1) of rank under half its width, where it is cheaper than the dense
-!> Op%N x Op%N products. ALF_LOWRANK_VERTEX=0 turns it off.
+!> Op%N x Op%N products. ALF_LOWRANK_VERTEX (op_lowrank_env_mode) can turn it off.
 !--------------------------------------------------------------------
   logical function op_lowrank_wanted(Op)
     Implicit none
     Type (Operator), intent(in) :: Op
-    Character (len=16) :: text
-    Integer :: length, status, value, ios
+    Character (len=32) :: text
+    Integer :: length, status
 
     if (Op_lowrank_mode < 0) then
        Op_lowrank_mode = 1
        call get_environment_variable("ALF_LOWRANK_VERTEX", text, length, status)
-       if (status == 0 .and. length > 0) then
-          read(text(1:length), *, iostat=ios) value
-          if (ios == 0 .and. value == 0) Op_lowrank_mode = 0
+       if (status /= 1 .and. length > 0) then
+          if (status == 0) Op_lowrank_mode = op_lowrank_env_mode(text(1:length))
+          if (status /= 0 .or. Op_lowrank_mode < 0) then
+             Write(error_unit, '(A)') ' ALF_LOWRANK_VERTEX must be one of 0/off/false/no or 1/on/true/yes, got "' &
+                  & // trim(text) // '"'
+             Call Terminate_on_error(ERROR_GENERIC, __FILE__, __LINE__)
+          endif
        endif
     endif
     op_lowrank_wanted = Op_lowrank_mode == 1 .and. Op%type >= 1 .and. .not. Op%diag &
          &              .and. Op%N > 1 .and. Op%N_non_zero >= 1 .and. 2*Op%N_non_zero < Op%N
   end function op_lowrank_wanted
 
+!> ALF_LOWRANK_VERTEX's value as a mode: 0 off (0, off, false, no), 1 on (1, on, true,
+!> yes), -1 for anything else; case and surrounding blanks are ignored.
+  integer function op_lowrank_env_mode(text)
+    Implicit none
+    Character (len=*), intent(in) :: text
+    Character (len=len(text)) :: low
+    Integer :: i, c
+
+    low = adjustl(text)
+    do i = 1, len(low)
+       c = iachar(low(i:i))
+       if (c >= iachar('A') .and. c <= iachar('Z')) low(i:i) = achar(c + 32)
+    enddo
+    select case (trim(low))
+    case ('0', 'off', 'false', 'no')
+       op_lowrank_env_mode = 0
+    case ('1', 'on', 'true', 'yes')
+       op_lowrank_env_mode = 1
+    case default
+       op_lowrank_env_mode = -1
+    end select
+  end function op_lowrank_env_mode
+
 !> Householder QR of V = Op%U(:,1:N_non_zero) in compact WY form, Q = I - HY HT HY^dag,
-!> and the start of P when it is a contiguous ascending run (0 otherwise).
+!> and the start of P when it is a contiguous ascending run (0 otherwise). Outside
+!> shared memory U is then cut to V, the only part the low-rank path reads.
   subroutine op_lowrank_setup(Op)
     Implicit none
     Type (Operator), intent(inout) :: Op
-    Complex (Kind=Kind(0.d0)), allocatable :: work(:), tau(:)
+    Complex (Kind=Kind(0.d0)), allocatable :: work(:), tau(:), V(:,:)
     Complex (Kind=Kind(0.d0)) :: wq(1)
     Integer :: n, nz, info, i
 
@@ -1222,6 +1252,13 @@ Contains
     do i = 2, n
        if (Op%P(i) /= Op%P(1) + i - 1) Op%P0 = 0
     enddo
+    if (.not. use_mpi_shm) then
+       allocate(V(n, nz))
+       V = Op%U(:, 1:nz)
+       deallocate(Op%U)
+       allocate(Op%U(n, nz))
+       Op%U = V
+    endif
   end subroutine op_lowrank_setup
 
 !> d(n) = e^{sgn g phi E(n)}, n <= N_non_zero, read as the dense path reads it.

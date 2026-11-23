@@ -15,7 +15,9 @@
 !   * Op_mmultR / Op_mmultL for cop N, T, C (and sign +-1), low-rank vs dense;
 !   * the up and down update cycles, low-rank vs dense;
 !   * Op_Wrap_panels vs the explicit wrap on the low-rank operator (test 37's check);
-!   * that Op_set picks the path only where it should (full rank, diagonal, type 0).
+!   * that Op_set picks the path only where it should (full rank, diagonal, type 0),
+!     and cuts U to its N_non_zero columns where it does;
+!   * how ALF_LOWRANK_VERTEX's value is read (op_lowrank_env_mode).
 
 Program LowrankVertex
 
@@ -84,6 +86,10 @@ Program LowrankVertex
       Call build(Opl)
       If (Opd%lowrank .or. .not. Opl%lowrank .or. Opl%P0 /= merge(0, 3, ip == 1)) Then
          Write (*,*) "PATH not chosen as expected: type", nt, "rank", nz, Opd%lowrank, Opl%lowrank, Opl%P0
+         nfail = nfail + 1
+      End If
+      If (size(Opl%U, 2) /= nz .or. size(Opd%U, 2) /= opn) Then
+         Write (*,*) "U not cut to rank: type", nt, "rank", nz, shape(Opl%U), shape(Opd%U)
          nfail = nfail + 1
       End If
 
@@ -173,6 +179,11 @@ Program LowrankVertex
    Call path_case("diagonal", 2, 2, .true.)
    Call path_case("type 0", 0, 3, .false.)
 
+   ! ALF_LOWRANK_VERTEX: words as well as digits, anything else refused (-1).
+   Call env_case("0", 0);   Call env_case(" OFF ", 0); Call env_case("False", 0); Call env_case("no", 0)
+   Call env_case("1", 1);   Call env_case("on", 1);    Call env_case("TRUE", 1);  Call env_case("yes", 1)
+   Call env_case("2", -1);  Call env_case("of", -1);   Call env_case("0.0", -1);  Call env_case("", -1)
+
    Call nsigma_single%clear()
    If (nfail > 0) Then
       Write (*,*) "FAILURES:", nfail
@@ -251,6 +262,16 @@ Contains
          nfail = nfail + 1
       End If
    End Subroutine check
+
+   Subroutine env_case(text, expected)
+      Character (Len=*), Intent(In) :: text
+      Integer, Intent(In) :: expected
+      If (op_lowrank_env_mode(text) /= expected) Then
+         Write (*,*) "ALF_LOWRANK_VERTEX='", text, "' read as", op_lowrank_env_mode(text), &
+            &        " expected", expected
+         nfail = nfail + 1
+      End If
+   End Subroutine env_case
 
    Subroutine path_case(label, nz_case, mode, diag)
       Character (Len=*), Intent(In) :: label
