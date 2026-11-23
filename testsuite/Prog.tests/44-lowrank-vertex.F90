@@ -16,7 +16,7 @@
 !   * the up and down update cycles, low-rank vs dense;
 !   * Op_Wrap_panels vs the explicit wrap on the low-rank operator (test 37's check);
 !   * that Op_set picks the path only where it should (full rank, diagonal, type 0),
-!     and cuts U to its N_non_zero columns where it does;
+!     and leaves U whole where it does, so Op_exp matches the dense operator's;
 !   * how ALF_LOWRANK_VERTEX's value is read (op_lowrank_env_mode).
 
 Program LowrankVertex
@@ -35,7 +35,7 @@ Program LowrankVertex
    Complex (Kind=Kind(0.D0)) :: mr0(Ndim,5), mrd(Ndim,5), mrl(Ndim,5)
    Complex (Kind=Kind(0.D0)) :: ml0(4,Ndim), mld(4,Ndim), mll(4,Ndim)
    Complex (Kind=Kind(0.D0)) :: xp(Ndim,ncols), yp(Ndim,ncols), field
-   Complex (Kind=Kind(0.D0)) :: vecs(opn,2)
+   Complex (Kind=Kind(0.D0)) :: vecs(opn,2), ed(opn,opn), el(opn,opn), eye(opn,opn)
    Real    (Kind=Kind(0.D0)) :: lam(2)
    Integer :: nt, nz, igt, icop, isg, iud, N_Type, i, j, nfail
    Character (Len=1) :: cop
@@ -88,10 +88,18 @@ Program LowrankVertex
          Write (*,*) "PATH not chosen as expected: type", nt, "rank", nz, Opd%lowrank, Opl%lowrank, Opl%P0
          nfail = nfail + 1
       End If
-      If (size(Opl%U, 2) /= nz .or. size(Opd%U, 2) /= opn) Then
-         Write (*,*) "U not cut to rank: type", nt, "rank", nz, shape(Opl%U), shape(Opd%U)
+      If (any(shape(Opl%U) /= [opn, opn]) .or. any(shape(Opd%U) /= [opn, opn])) Then
+         Write (*,*) "U not whole: type", nt, "rank", nz, shape(Opl%U), shape(Opd%U)
          nfail = nfail + 1
       End If
+      ! Op_exp reads every column of U, low-rank or not.
+      eye = zero
+      Do i = 1, opn
+         eye(i,i) = one
+      End Do
+      Call Op_exp(Opd%g, Opd, ed)
+      Call Op_exp(Opl%g, Opl, el)
+      Call check("Op_exp", ed, el, eye)
 
       Select Case (nt)
       Case (1)

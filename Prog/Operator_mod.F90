@@ -91,8 +91,7 @@ Module Operator_mod
      ! wraps rotate by the product Q of N_non_zero Householder reflectors (QR of V)
      ! instead of U. Q's first N_non_zero columns are U's up to a phase, which the
      ! update in the rotated basis does not see; only the null-space basis differs.
-     ! Outside MPI shared memory U then holds only V (Op%N x N_non_zero); O stays whole,
-     ! as Op_V_is_symmetric and Op_is_real read it after Op_set.
+     ! U and O stay whole (Op%N x Op%N): Op_exp and other readers use every column.
      logical          :: lowrank = .false.
      complex (Kind=Kind(0.d0)), allocatable :: HY(:,:), HT(:,:)  !> Q = I - HY HT HY^dag (compact WY)
      Integer          :: P0 = 0                               !> P(1) if P is a contiguous ascending run, else 0
@@ -1220,12 +1219,12 @@ Contains
   end function op_lowrank_env_mode
 
 !> Householder QR of V = Op%U(:,1:N_non_zero) in compact WY form, Q = I - HY HT HY^dag,
-!> and the start of P when it is a contiguous ascending run (0 otherwise). Outside
-!> shared memory U is then cut to V, the only part the low-rank path reads.
+!> and the start of P when it is a contiguous ascending run (0 otherwise). U is left
+!> whole.
   subroutine op_lowrank_setup(Op)
     Implicit none
     Type (Operator), intent(inout) :: Op
-    Complex (Kind=Kind(0.d0)), allocatable :: work(:), tau(:), V(:,:)
+    Complex (Kind=Kind(0.d0)), allocatable :: work(:), tau(:)
     Complex (Kind=Kind(0.d0)) :: wq(1)
     Integer :: n, nz, info, i
 
@@ -1252,13 +1251,6 @@ Contains
     do i = 2, n
        if (Op%P(i) /= Op%P(1) + i - 1) Op%P0 = 0
     enddo
-    if (.not. use_mpi_shm) then
-       allocate(V(n, nz))
-       V = Op%U(:, 1:nz)
-       deallocate(Op%U)
-       allocate(Op%U(n, nz))
-       Op%U = V
-    endif
   end subroutine op_lowrank_setup
 
 !> d(n) = e^{sgn g phi E(n)}, n <= N_non_zero, read as the dense path reads it.
